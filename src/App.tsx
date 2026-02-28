@@ -84,8 +84,7 @@ export default function App() {
             // 查詢 daily_video_stats 並關聯 daily_channel_stats 取得頻道名稱
             const { data: videoData, error: videoError } = await supabase
                 .from('daily_video_stats')
-                .select('*')
-                .order('timestamp', { ascending: false });
+                .select('*');
 
             if (videoError) throw videoError;
 
