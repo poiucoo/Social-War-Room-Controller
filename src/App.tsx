@@ -74,6 +74,7 @@ export default function App() {
     const [currentView, setCurrentView] = useState<'dashboard' | 'channel' | 'tags'>('dashboard');
 
     const [data, setData] = useState<PostData[]>([]);
+    const [channelDataList, setChannelDataList] = useState<any[]>([]); // 追加儲存所有頻道的原始資料
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -100,6 +101,8 @@ export default function App() {
             // 建立 Channel Dictionary
             const channelMap = new Map();
             if (channelData) {
+                setChannelDataList(channelData); // 供給頻道概況使用
+
                 channelData.forEach((c: any) => {
                     const cid = c.id || c.channel_id;
                     if (cid) channelMap.set(cid, c);
@@ -622,15 +625,65 @@ export default function App() {
                                     <LineChart className="text-indigo-600 w-8 h-8" />
                                     <div>
                                         <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 leading-tight">
-                                            頻道整體概況 (開發中)
+                                            頻道整體概況
                                         </h1>
-                                        <p className="text-xs text-gray-400 font-medium">即將解析 daily_channel_stats 數據</p>
+                                        <p className="text-xs text-gray-400 font-medium">追蹤您的所有社群帳號成長軌跡</p>
                                     </div>
                                 </div>
                             </header>
-                            <div className="bg-white p-12 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-gray-400">
-                                <LineChart className="w-12 h-12 mb-4 text-gray-300" />
-                                <p>頻道分析面板即將在此呈現</p>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {isLoading ? (
+                                    [...Array(3)].map((_, i) => (
+                                        <div key={i} className="bg-white p-6 rounded-2xl border border-gray-100 h-40 animate-pulse"></div>
+                                    ))
+                                ) : channelDataList.length > 0 ? (
+                                    channelDataList.map(ch => (
+                                        <div key={ch.id || ch.channel_id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow group relative overflow-hidden">
+                                            {/* 背景裝飾 */}
+                                            <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-3xl -mr-10 -mt-10 opacity-20 ${platformBgColors[ch.platform?.toLowerCase()] || 'bg-gray-300'}`}></div>
+
+                                            <div className="flex justify-between items-start mb-4 relative z-10">
+                                                <div>
+                                                    <h3 className="font-bold text-gray-900 text-lg mb-1">{ch.title || ch.name || '未命名頻道'}</h3>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[ch.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm`}>
+                                                            {ch.platform || '未知'}
+                                                        </span>
+                                                        {(ch.custom_url || ch.ownerUsername) && (
+                                                            <span className="text-xs text-gray-400 font-medium">{ch.custom_url || `@${ch.ownerUsername}`}</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                {ch.url && (
+                                                    <a href={ch.url} target="_blank" rel="noreferrer" className="p-2 bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="前往頻道">
+                                                        <ExternalLink className="w-4 h-4" />
+                                                    </a>
+                                                )}
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-4 mt-6 relative z-10">
+                                                <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100/50">
+                                                    <p className="text-xs text-gray-500 font-medium mb-1">總訂閱 / 粉絲</p>
+                                                    <p className="font-bold text-gray-900 text-lg">{(ch.subscribers || ch.followsCount || 0).toLocaleString()}</p>
+                                                </div>
+                                                <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100/50">
+                                                    <p className="text-xs text-gray-500 font-medium mb-1">累積觀看次數</p>
+                                                    <p className="font-bold text-gray-900 text-lg">{(ch.total_views || 0).toLocaleString()}</p>
+                                                </div>
+                                                <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100/50 col-span-2 flex justify-between items-center">
+                                                    <span className="text-xs text-gray-500 font-medium">總上傳影片數</span>
+                                                    <span className="font-bold text-gray-900">{(ch.video_count || ch.igtvVideoCount || 0).toLocaleString()} <span className="text-xs text-gray-400 font-normal">部</span></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="col-span-full bg-white p-12 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-gray-400">
+                                        <LineChart className="w-12 h-12 mb-4 text-gray-300" />
+                                        <p>目前尚無頻道資料</p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
