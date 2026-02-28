@@ -26,6 +26,8 @@ interface PostData {
     viralScore?: number;
     er?: number;
     hoursSincePublished?: number;
+
+    [key: string]: any;
 }
 
 const MOCK_DATA: PostData[] = [
@@ -35,17 +37,24 @@ const MOCK_DATA: PostData[] = [
     { id: '4', channel_id: 'c2', channels: { id: 'c2', name: 'Design Daily' }, platform: 'youtube', title: 'UI Trends 2026', content_id: 'v4', metrics: { views: 200000, likes: 8000, comments: 500 }, timestamp: new Date(Date.now() - 72 * 3600 * 1000).toISOString() },
 ];
 
-function calculateMetrics(item: PostData): PostData {
-    // Avoid division by zero by setting a minimum of 0.1 hours
-    const hoursSincePublished = Math.max(0.1, (Date.now() - new Date(item.timestamp).getTime()) / (1000 * 3600));
-    const views = item.metrics?.views || 0;
-    const likes = item.metrics?.likes || 0;
-    const comments = item.metrics?.comments || 0;
+function calculateMetrics(item: any): PostData {
+    // 安全解析時間，若欄位不存在則使用當前時間避免崩潰
+    const safeTimestamp = item.timestamp || item.created_at || new Date().toISOString();
+    const hoursSincePublished = Math.max(0.1, (Date.now() - new Date(safeTimestamp).getTime()) / (1000 * 3600));
+    const views = item.metrics?.views || item.view_count || item.views || 0;
+    const likes = item.metrics?.likes || item.like_count || item.likes || 0;
+    const comments = item.metrics?.comments || item.comment_count || item.comments || 0;
 
     const viralScore = Math.round(views / hoursSincePublished);
     const er = views > 0 ? ((likes + comments) / views) * 100 : 0;
 
-    return { ...item, viralScore, er: parseFloat(er.toFixed(2)), hoursSincePublished };
+    return {
+        ...item,
+        timestamp: safeTimestamp,
+        viralScore,
+        er: parseFloat(er.toFixed(2)),
+        hoursSincePublished
+    };
 }
 
 const platformColors: Record<string, string> = {
@@ -155,11 +164,14 @@ export default function App() {
     };
 
     // Prepare LineChart Data
-    const chartData = [...filteredData].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).map(d => ({
-        name: d.title.substring(0, 15) + '...',
-        Views: d.metrics?.views || 0,
-        ViralScore: d.viralScore || 0
-    }));
+    const chartData = [...filteredData].sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()).map(d => {
+        const titleStr = d.title || d.video_title || d.name || '未命名內容';
+        return {
+            name: titleStr.length > 15 ? titleStr.substring(0, 15) + '...' : titleStr,
+            Views: d.metrics?.views || d.views || d.view_count || 0,
+            ViralScore: d.viralScore || 0
+        };
+    });
 
     // Prepare PieChart Data for Platform Distribution
     const platformDistribution = useMemo(() => {
@@ -236,6 +248,22 @@ export default function App() {
                             <p className="text-sm text-red-600 mt-1">{error}</p>
                             <p className="text-xs text-red-500 mt-2">Currently displaying simulated mock data.</p>
                         </div>
+                    </div>
+                )}
+
+                {/* Schema Discovery View */}
+                {data.length > 0 && !error && (
+                    <div className="bg-indigo-50 border border-indigo-200 p-6 rounded-2xl shadow-sm mb-6 max-h-96 overflow-auto">
+                        <h2 className="text-lg font-bold text-indigo-900 mb-2 flex items-center gap-2">
+                            <Layers className="w-5 h-5 text-indigo-500" />
+                            資料庫 Schema 探測器 (Raw Data Preview)
+                        </h2>
+                        <p className="text-sm text-indigo-700 mb-4">
+                            為了能依照您的實際欄位重新規劃 UI，請拷貝以下這筆資料，並貼給 AI！
+                        </p>
+                        <pre className="text-xs text-indigo-800 bg-white p-4 rounded-lg border border-indigo-100/50 shadow-inner overflow-x-auto">
+                            {JSON.stringify(data[0], null, 2)}
+                        </pre>
                     </div>
                 )}
 
@@ -441,8 +469,8 @@ export default function App() {
                                                             </span>
                                                             <span className="text-xs font-semibold text-gray-400">{item.channels?.name || item.channel_id}</span>
                                                         </div>
-                                                        <span className="font-semibold text-gray-900 max-w-[300px] truncate" title={item.title}>
-                                                            {item.title}
+                                                        <span className="font-semibold text-gray-900 max-w-[300px] truncate" title={item.title || item.video_title || '未命名內容'}>
+                                                            {item.title || item.video_title || '未命名內容'}
                                                         </span>
                                                     </div>
                                                 </td>
