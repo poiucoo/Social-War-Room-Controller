@@ -82,20 +82,39 @@ export default function App() {
         setError(null);
         try {
             // 查詢 daily_video_stats 並關聯 daily_channel_stats 取得頻道名稱
-            const { data: fetchResult, error: supabaseError } = await supabase
+            const { data: videoData, error: videoError } = await supabase
                 .from('daily_video_stats')
-                .select('*, channels:daily_channel_stats(id, name)')
+                .select('*')
                 .order('timestamp', { ascending: false });
 
-            if (supabaseError) throw supabaseError;
+            if (videoError) throw videoError;
 
-            if (fetchResult && fetchResult.length > 0) {
+            const { data: channelData, error: channelError } = await supabase
+                .from('daily_channel_stats')
+                .select('*');
+
+            if (channelError) throw channelError;
+
+            // 建立 Channel Dictionary
+            const channelMap = new Map();
+            if (channelData) {
+                channelData.forEach((c: any) => {
+                    const cid = c.id || c.channel_id;
+                    if (cid) channelMap.set(cid, c);
+                });
+            }
+
+            if (videoData && videoData.length > 0) {
                 // 將查詢到的 channels 資料結構映射到現有 UI 需要的格式
-                const processedData = fetchResult.map((item: any) => calculateMetrics({
-                    ...item,
-                    // 如果 Supabase 因為 FK 關聯回傳的物件是 array 的話取第一個，若是 obj 就直接用
-                    channels: Array.isArray(item.channels) ? item.channels[0] : item.channels
-                }));
+                const processedData = videoData.map((item: any) => {
+                    const cid = item.channel_id || item.channelId;
+                    const matchedChannel = channelMap.get(cid) || { id: cid || 'unknown', name: `頻道 ${cid || '未知'}` };
+
+                    return calculateMetrics({
+                        ...item,
+                        channels: matchedChannel
+                    });
+                });
                 setData(processedData);
             } else {
                 // Fallback for development if table is empty
