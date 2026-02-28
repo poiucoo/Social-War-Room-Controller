@@ -72,16 +72,21 @@ export default function App() {
         setIsLoading(true);
         setError(null);
         try {
-            // Read-only query using *, channels(*) to join
+            // 查詢 daily_video_stats 並關聯 daily_channel_stats 取得頻道名稱
             const { data: fetchResult, error: supabaseError } = await supabase
-                .from('social_stats')
-                .select('*, channels(id, name)')
+                .from('daily_video_stats')
+                .select('*, channels:daily_channel_stats(id, name)')
                 .order('timestamp', { ascending: false });
 
             if (supabaseError) throw supabaseError;
 
             if (fetchResult && fetchResult.length > 0) {
-                const processedData = fetchResult.map(calculateMetrics);
+                // 將查詢到的 channels 資料結構映射到現有 UI 需要的格式
+                const processedData = fetchResult.map((item: any) => calculateMetrics({
+                    ...item,
+                    // 如果 Supabase 因為 FK 關聯回傳的物件是 array 的話取第一個，若是 obj 就直接用
+                    channels: Array.isArray(item.channels) ? item.channels[0] : item.channels
+                }));
                 setData(processedData);
             } else {
                 // Fallback for development if table is empty
