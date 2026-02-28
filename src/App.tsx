@@ -237,6 +237,36 @@ export default function App() {
         })).filter(item => item.value > 0);
     }, [filteredData]);
 
+    // Prepare Tags Analytics Data
+    const tagsStats = useMemo(() => {
+        const tagMap: Record<string, { count: number; views: number; totalEr: number }> = {};
+
+        filteredData.forEach(post => {
+            if (Array.isArray(post.tags) && post.tags.length > 0) {
+                post.tags.forEach(tag => {
+                    if (!tag) return;
+                    const cleanTag = tag.trim().toLowerCase();
+                    if (!tagMap[cleanTag]) {
+                        tagMap[cleanTag] = { count: 0, views: 0, totalEr: 0 };
+                    }
+                    tagMap[cleanTag].count += 1;
+                    tagMap[cleanTag].views += (post.viewCount || 0);
+                    tagMap[cleanTag].totalEr += (post.er || 0);
+                });
+            }
+        });
+
+        return Object.entries(tagMap)
+            .map(([tag, stats]) => ({
+                tag,
+                count: stats.count,
+                views: stats.views,
+                avgEr: stats.count > 0 ? (stats.totalEr / stats.count).toFixed(2) : 0
+            }))
+            .sort((a, b) => b.views - a.views)
+            .slice(0, 50); // 只取前 50 大標籤
+    }, [filteredData]);
+
     const viralPosts = filteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold);
 
     return (
@@ -739,18 +769,74 @@ export default function App() {
                         <div className="max-w-7xl mx-auto space-y-6">
                             <header className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100 gap-4">
                                 <div className="flex items-center gap-3">
-                                    <Hash className="text-indigo-600 w-8 h-8" />
+                                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                                        <Hash className="w-8 h-8" />
+                                    </div>
                                     <div>
-                                        <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 leading-tight">
-                                            熱門標籤分析 (開發中)
+                                        <h1 className="text-2xl font-bold text-gray-900 leading-tight">
+                                            熱門標籤分析矩陣
                                         </h1>
-                                        <p className="text-xs text-gray-400 font-medium">即將對所有 tags 進行詞頻與流量交叉分析</p>
+                                        <p className="text-xs text-gray-500 font-medium">透視哪些關鍵字為您帶來最多流量與互動</p>
                                     </div>
                                 </div>
                             </header>
-                            <div className="bg-white p-12 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-gray-400">
-                                <Hash className="w-12 h-12 mb-4 text-gray-300" />
-                                <p>標籤流量轉換分析模組即將完成</p>
+
+                            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/30">
+                                    <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                                        流量紅利排行榜 (Top 50)
+                                    </h2>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm text-left text-gray-500">
+                                        <thead className="text-xs text-gray-400 uppercase bg-gray-50/80">
+                                            <tr>
+                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">標籤名稱 (Hashtag)</th>
+                                                <th className="px-6 py-4 font-semibold whitespace-nowrap text-right">出現次數</th>
+                                                <th className="px-6 py-4 font-semibold text-right">累積觀看流量</th>
+                                                <th className="px-6 py-4 font-semibold whitespace-nowrap text-right">平均互動率 (ER)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {isLoading ? (
+                                                [...Array(5)].map((_, i) => (
+                                                    <tr key={i} className="border-b border-gray-50"><td colSpan={4} className="px-6 py-4"><div className="h-10 bg-gray-100 rounded animate-pulse"></div></td></tr>
+                                                ))
+                                            ) : tagsStats.length > 0 ? (
+                                                tagsStats.map((item, index) => (
+                                                    <tr key={item.tag} className="bg-white border-b border-gray-50 hover:bg-gray-50/50 transition-colors group">
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-3">
+                                                                <span className={`w-6 text-center font-bold ${index < 3 ? 'text-indigo-600' : 'text-gray-300'}`}>
+                                                                    {index + 1}
+                                                                </span>
+                                                                <span className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">#{item.tag}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right font-medium text-gray-600">
+                                                            {item.count} <span className="text-xs text-gray-400 font-normal">次</span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <div className="font-bold text-gray-900 text-base">{(item.views).toLocaleString()}</div>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <div className="inline-flex items-center justify-end gap-1.5 font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-md">
+                                                                {item.avgEr}%
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            ) : (
+                                                <tr>
+                                                    <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
+                                                        <Hash className="w-10 h-10 mx-auto text-gray-300 mb-3" />
+                                                        沒有分析出任何標籤數據
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
                     )}
