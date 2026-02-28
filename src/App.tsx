@@ -12,17 +12,27 @@ interface PostData {
     id: string;
     channel_id: string;
     channels?: Channel;
-    platform: 'youtube' | 'instagram' | 'threads';
+    platform: string;
     title: string;
-    content_id: string;
-    metrics: {
+    description?: string;
+    tags?: string[];
+    url?: string;
+
+    // 真實的計數欄位
+    viewCount?: number;
+    likeCount?: number;
+    commentCount?: number;
+
+    // 為了向前相容與動態屬性
+    metrics?: {
         views: number;
         likes: number;
         comments: number;
     };
-    timestamp: string;
+    publishedAt?: string;
+    timestamp?: string;
 
-    // Calculated
+    // 前端計算後的屬性
     viralScore?: number;
     er?: number;
     hoursSincePublished?: number;
@@ -38,22 +48,31 @@ const MOCK_DATA: PostData[] = [
 ];
 
 function calculateMetrics(item: any): PostData {
-    // 安全解析時間，若欄位不存在則使用當前時間避免崩潰
-    const safeTimestamp = item.timestamp || item.created_at || new Date().toISOString();
+    // 安全解析時間，優先取真實拿到的 publishedAt
+    const safeTimestamp = item.publishedAt || item.timestamp || item.created_at || new Date().toISOString();
     const hoursSincePublished = Math.max(0.1, (Date.now() - new Date(safeTimestamp).getTime()) / (1000 * 3600));
-    const views = item.metrics?.views || item.view_count || item.views || 0;
-    const likes = item.metrics?.likes || item.like_count || item.likes || 0;
-    const comments = item.metrics?.comments || item.comment_count || item.comments || 0;
+
+    // 通用流量提取：優先使用真實欄位 viewCount，若無則降級
+    const views = Number(item.viewCount) || item.metrics?.views || item.view_count || item.views || 0;
+    const likes = Number(item.likeCount) || item.metrics?.likes || item.like_count || item.likes || 0;
+    const comments = Number(item.commentCount) || item.metrics?.comments || item.comment_count || item.comments || 0;
 
     const viralScore = Math.round(views / hoursSincePublished);
     const er = views > 0 ? ((likes + comments) / views) * 100 : 0;
 
     return {
         ...item,
+        title: item.title || item.name || '未命名內容',
+        platform: item.platform || 'unknown',
         timestamp: safeTimestamp,
+        viewCount: views,
+        likeCount: likes,
+        commentCount: comments,
         viralScore,
         er: parseFloat(er.toFixed(2)),
-        hoursSincePublished
+        hoursSincePublished,
+        // 確保 tags 為陣列格式
+        tags: Array.isArray(item.tags) ? item.tags : (typeof item.tags === 'string' ? item.tags.split(',') : [])
     };
 }
 
@@ -181,35 +200,41 @@ export default function App() {
     const viralThreshold = mean + (2 * stdDev);
 
     const kpiData = {
-        totalViews: filteredData.reduce((acc, curr) => acc + (curr.metrics?.views || 0), 0),
+        totalViews: filteredData.reduce((acc, curr) => acc + (curr.viewCount || 0), 0),
         avgER: (filteredData.reduce((acc, curr) => acc + (curr.er || 0), 0) / Math.max(filteredData.length, 1)).toFixed(2),
         totalPosts: filteredData.length,
         viralPosts: filteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length
     };
 
     // Prepare LineChart Data
-    const chartData = [...filteredData].sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()).map(d => {
-        const titleStr = d.title || d.video_title || d.name || '未命名內容';
+    const chartData = [...filteredData].sort((a, b) => {
+        const timeA = new Date(a.timestamp ? String(a.timestamp) : '').getTime();
+        const timeB = new Date(b.timestamp ? String(b.timestamp) : '').getTime();
+        return timeA - timeB;
+    }).map(d => {
+        const titleStr = d.title || '未命名內容';
         return {
             name: titleStr.length > 15 ? titleStr.substring(0, 15) + '...' : titleStr,
-            Views: d.metrics?.views || d.views || d.view_count || 0,
+            Views: d.viewCount || 0,
             ViralScore: d.viralScore || 0
         };
     });
 
     // Prepare PieChart Data for Platform Distribution
     const platformDistribution = useMemo(() => {
-        const stats = { youtube: 0, instagram: 0, threads: 0 };
+        const stats: Record<string, number> = {};
         filteredData.forEach(d => {
-            if (d.platform in stats) {
-                stats[d.platform as keyof typeof stats] += (d.metrics?.views || 0);
+            const plat = d.platform?.toLowerCase() || 'unknown';
+            if (plat !== 'unknown') {
+                stats[plat] = (stats[plat] || 0) + (d.viewCount || 0);
             }
         });
-        return [
-            { name: 'YouTube', value: stats.youtube, fill: platformColors.youtube },
-            { name: 'Instagram', value: stats.instagram, fill: platformColors.instagram },
-            { name: 'Threads', value: stats.threads, fill: platformColors.threads }
-        ].filter(item => item.value > 0);
+
+        return Object.entries(stats).map(([key, value]) => ({
+            name: key.charAt(0).toUpperCase() + key.slice(1),
+            value,
+            fill: platformColors[key] || '#9ca3af'
+        })).filter(item => item.value > 0);
     }, [filteredData]);
 
     const viralPosts = filteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold);
@@ -482,15 +507,26 @@ export default function App() {
                                                     <div className="absolute top-0 right-0 w-24 h-24 bg-orange-400/10 rounded-full blur-2xl -mr-8 -mt-8"></div>
                                                     <div className="flex items-start justify-between relative z-10">
                                                         <div>
-                                                            <p className="text-xs font-bold text-gray-500 mb-1">{post.channels?.name || 'Unknown Channel'}</p>
+                                                            <p className="text-xs font-bold text-gray-500 mb-1">{post.channels?.name || post.channelTitle || 'Unknown Channel'}</p>
                                                             <h3 className="text-sm font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h3>
                                                         </div>
-                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform]} shadow-sm m-1 shrink-0`}>
+                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm m-1 shrink-0`}>
                                                             {post.platform}
                                                         </span>
                                                     </div>
+
+                                                    {/* Tags Rendering in Wall of fame */}
+                                                    {post.tags && post.tags.length > 0 && (
+                                                        <div className="mt-2 flex flex-wrap gap-1 relative z-10">
+                                                            {post.tags.slice(0, 3).map((tag: string, idx: number) => (
+                                                                <span key={idx} className="text-[10px] bg-white/60 text-orange-600 px-1.5 py-0.5 rounded border border-orange-100/50">#{tag.trim()}</span>
+                                                            ))}
+                                                            {post.tags.length > 3 && <span className="text-[10px] text-gray-400">+{post.tags.length - 3}</span>}
+                                                        </div>
+                                                    )}
+
                                                     <div className="mt-4 flex items-center justify-between text-sm relative z-10">
-                                                        <div className="font-semibold text-gray-700">{(post.metrics?.views || 0).toLocaleString()} <span className="text-xs font-normal text-gray-400">觀看</span></div>
+                                                        <div className="font-semibold text-gray-700">{(post.viewCount || 0).toLocaleString()} <span className="text-xs font-normal text-gray-400">觀看</span></div>
                                                         <div className="flex items-center gap-1.5 font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-md">
                                                             <Flame className="w-3.5 h-3.5" />
                                                             {post.viralScore?.toLocaleString()} <span className="text-xs font-normal text-orange-400">/hr</span>
@@ -568,25 +604,35 @@ export default function App() {
                                                             <td className="px-6 py-4">
                                                                 <div className="flex flex-col gap-1 w-max">
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[item.platform]} shrink-0`}>
+                                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[item.platform?.toLowerCase()] || 'bg-gray-500'} shrink-0`}>
                                                                             {item.platform}
                                                                         </span>
-                                                                        <span className="text-xs font-semibold text-gray-400">{item.channels?.name || item.channel_id}</span>
+                                                                        <span className="text-xs font-semibold text-gray-400">{item.channels?.name || item.channelTitle || item.channel_id}</span>
                                                                     </div>
-                                                                    <span className="font-semibold text-gray-900 max-w-[300px] truncate" title={item.title || item.video_title || '未命名內容'}>
-                                                                        {item.title || item.video_title || '未命名內容'}
-                                                                    </span>
+                                                                    <a href={item.url || '#'} target="_blank" rel="noreferrer" className="group flex items-center justify-between gap-4 max-w-[350px]">
+                                                                        <span className="font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors" title={item.title}>
+                                                                            {item.title}
+                                                                        </span>
+                                                                        {item.url && <ExternalLink className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 flex-shrink-0" />}
+                                                                    </a>
+                                                                    {item.tags && item.tags.length > 0 && (
+                                                                        <div className="flex flex-wrap gap-1 mt-1 max-w-[350px]">
+                                                                            {item.tags.slice(0, 4).map((tag: string, idx: number) => (
+                                                                                <span key={idx} className="text-[10px] bg-gray-100 text-gray-500 px-1 py-0.5 rounded">#{tag.trim()}</span>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             </td>
                                                             <td className="px-6 py-4 whitespace-nowrap text-gray-400">
-                                                                {new Date(item.timestamp).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                                {new Date(item.timestamp || '').toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                                                 <div className="text-[10px] text-gray-400 mt-1">{item.hoursSincePublished?.toFixed(0)} 小時前</div>
                                                             </td>
                                                             <td className="px-6 py-4">
-                                                                <div className="font-semibold text-gray-900">{(item.metrics?.views || 0).toLocaleString()}</div>
+                                                                <div className="font-semibold text-gray-900">{(item.viewCount || 0).toLocaleString()}</div>
                                                                 <div className="text-xs text-gray-400 mt-1 flex gap-2">
-                                                                    <span title="Likes">👍 {item.metrics?.likes || 0}</span>
-                                                                    <span title="Comments">💬 {item.metrics?.comments || 0}</span>
+                                                                    <span title="Likes">👍 {item.likeCount || 0}</span>
+                                                                    <span title="Comments">💬 {item.commentCount || 0}</span>
                                                                 </div>
                                                             </td>
                                                             <td className="px-6 py-4">
