@@ -128,17 +128,16 @@ const platformBgColors: Record<string, string> = {
 
 export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [currentView, setCurrentView] = useState<'dashboard' | 'channel' | 'tags'>('dashboard');
+    const [currentView, setCurrentView] = useState<'dashboard' | 'insights' | 'channel' | 'wall-of-fame' | 'tags'>('dashboard');
 
     const [data, setData] = useState<PostData[]>([]);
     const [channelDataList, setChannelDataList] = useState<ChannelStat[]>([]);
     const [youtubeReports, setYoutubeReports] = useState<YoutubeReporting[]>([]);
 
     const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
 
+    const [platformFilter, setPlatformFilter] = useState('all');
     const [channelFilter, setChannelFilter] = useState('all');
-    const [sortBy, setSortBy] = useState('timestamp');
 
     const fetchData = async () => {
         setIsLoading(true);
@@ -200,7 +199,6 @@ export default function App() {
             }
         } catch (err: any) {
             console.error('Error fetching data:', err);
-            setError(err.message || 'Failed to fetch data from Supabase. Make sure your .env is set properly and RLS allows read access.');
             // Fallback to demo data to keep the UI interactive during development
             setData(MOCK_DATA.map(calculateMetrics));
         } finally {
@@ -212,22 +210,28 @@ export default function App() {
         fetchData();
     }, []);
 
-    // Extract unique channels
+    // Extract unique channels with proper titles and platform filtering
     const uniqueChannels = useMemo(() => {
-        const channelsMap = new Map<string, { id: string, name: string }>();
-        data.forEach(item => {
-            if (item.channels && item.channels.id && item.channels.name) {
-                channelsMap.set(item.channels.id, { id: item.channels.id, name: item.channels.name });
-            } else if (item.channel_id) { // Fallback if join fails but we have channel_id
-                channelsMap.set(item.channel_id, { id: item.channel_id, name: `Channel ${item.channel_id}` });
+        const channelsMap = new Map<string, { id: string, name: string, platform: string }>();
+        channelDataList.forEach(c => {
+            const cid = c.id || c.channel_id;
+            const ctitle = c.title || c.name || `頻道 ${cid}`;
+            const cplatform = c.platform?.toLowerCase() || 'youtube';
+            if (cid && (platformFilter === 'all' || platformFilter === cplatform)) {
+                channelsMap.set(cid, { id: cid, name: ctitle, platform: cplatform });
             }
         });
         return Array.from(channelsMap.values());
-    }, [data]);
+    }, [channelDataList, platformFilter]);
 
     // Apply Filters and Sorting
     const filteredData = useMemo(() => {
         let result = [...data];
+
+        if (platformFilter !== 'all') {
+            result = result.filter(d => (d.platform?.toLowerCase() || 'youtube') === platformFilter);
+        }
+
         if (channelFilter !== 'all') {
             result = result.filter(d =>
                 (d.channels && d.channels.id === channelFilter) ||
@@ -236,18 +240,13 @@ export default function App() {
         }
 
         result.sort((a, b) => {
-            if (sortBy === 'timestamp') {
-                const timeA = new Date(a.timestamp ? String(a.timestamp) : 0).getTime();
-                const timeB = new Date(b.timestamp ? String(b.timestamp) : 0).getTime();
-                return timeB - timeA;
-            }
-            if (sortBy === 'viralScore') return (b.viralScore || 0) - (a.viralScore || 0);
-            if (sortBy === 'er') return (b.er || 0) - (a.er || 0);
-            return 0;
+            const timeA = new Date(a.timestamp ? String(a.timestamp) : 0).getTime();
+            const timeB = new Date(b.timestamp ? String(b.timestamp) : 0).getTime();
+            return timeB - timeA;
         });
 
         return result;
-    }, [data, channelFilter, sortBy]);
+    }, [data, platformFilter, channelFilter]);
 
     // Calculate Outliers (2 std deviations) for Viral Score globally (or per filtered context)
     const viralScores = filteredData.map(d => d.viralScore || 0);
@@ -416,10 +415,24 @@ export default function App() {
                     </button>
 
                     <button
+                        onClick={() => setCurrentView('insights')}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'insights' ? 'bg-amber-50 text-amber-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                        <Activity className="w-5 h-5 flex-shrink-0" />
+                        {isSidebarOpen && <span>智能運營優化</span>}
+                    </button>
+
+                    <button
                         onClick={() => setCurrentView('channel')}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'channel' ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
                         <LineChart className="w-5 h-5 flex-shrink-0" />
                         {isSidebarOpen && <span>頻道整體概況</span>}
+                    </button>
+
+                    <button
+                        onClick={() => setCurrentView('wall-of-fame')}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'wall-of-fame' ? 'bg-orange-50 text-orange-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                        <Flame className="w-5 h-5 flex-shrink-0" />
+                        {isSidebarOpen && <span>超級爆款金榜</span>}
                     </button>
 
                     <button
@@ -442,96 +455,100 @@ export default function App() {
             {/* Main Content Area */}
             <div className="flex-1 flex flex-col h-screen overflow-hidden">
 
-                {/* Topbar for mobile opening sidebar */}
-                <div className="lg:hidden bg-white border-b border-gray-200 p-4 flex items-center gap-4">
-                    <button onClick={() => setIsSidebarOpen(true)} className="text-gray-500 hover:text-indigo-600 transition-colors">
-                        <Menu className="w-6 h-6" />
-                    </button>
-                    <span className="font-bold text-gray-900">War Room</span>
-                </div>
+                {/* Topbar for filtering */}
+                <header className="bg-white border-b border-gray-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 z-10 shadow-sm relative">
+                    <div className="flex items-center gap-4 w-full sm:w-auto">
+                        <button onClick={() => setIsSidebarOpen(true)} className="text-gray-500 hover:text-indigo-600 transition-colors lg:hidden">
+                            <Menu className="w-6 h-6" />
+                        </button>
+                        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 leading-tight hidden lg:block">
+                            Omnichannel War Room
+                        </h1>
+                    </div>
+
+                    <div className="flex gap-3 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
+                        <select
+                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 p-2.5 outline-none font-medium min-w-[140px]"
+                            value={platformFilter}
+                            onChange={(e) => {
+                                setPlatformFilter(e.target.value);
+                                setChannelFilter('all'); // 換平台時重設頻道
+                            }}
+                        >
+                            <option value="all">所有平台 (綜效)</option>
+                            <option value="youtube">YouTube</option>
+                            <option value="instagram">Instagram</option>
+                            <option value="threads">Threads</option>
+                        </select>
+
+                        <select
+                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 p-2.5 outline-none font-medium min-w-[180px]"
+                            value={channelFilter}
+                            onChange={(e) => setChannelFilter(e.target.value)}
+                        >
+                            <option value="all">所有頻道 (All Channels)</option>
+                            {uniqueChannels.map(c => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                        </select>
+
+                        <button
+                            onClick={fetchData}
+                            disabled={isLoading}
+                            className="p-2.5 text-gray-500 hover:text-indigo-600 bg-gray-50 hover:bg-indigo-50 rounded-lg transition-colors border border-gray-200 hover:border-indigo-200 disabled:opacity-50 shrink-0"
+                            title="Refresh Data"
+                        >
+                            <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin cursor-wait' : ''}`} />
+                        </button>
+                    </div>
+                </header>
 
                 {/* Scrollable Content View */}
                 <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
 
                     {/* Render Content Based on currentView */}
+                    {currentView === 'insights' && (
+                        <div className="max-w-7xl mx-auto space-y-6">
+                            <div className="flex items-center gap-3 mb-6">
+                                <Activity className="text-amber-500 w-8 h-8" />
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-900">智能運營優化中心</h2>
+                                    <p className="text-sm text-gray-500">基於頻道 YouTube Studio 的日誌數據，為您產出具體可行的下一步決策。</p>
+                                </div>
+                            </div>
+
+                            {channelFilter === 'all' ? (
+                                <div className="bg-amber-50 rounded-2xl p-10 text-center border border-amber-100 shadow-sm">
+                                    <Activity className="w-16 h-16 text-amber-300 mx-auto mb-4" />
+                                    <h3 className="text-xl font-bold text-amber-800">請先於上方選擇特定單一頻道</h3>
+                                    <p className="text-base text-amber-700 mt-2">智能優化系統專注於解析單一頻道的生長軌跡，<br />請在螢幕右上方選擇您想深度優化的目標頻道來啟動 AI 運算。</p>
+                                </div>
+                            ) : (
+                                renderActionableInsights() || (
+                                    <div className="bg-green-50 rounded-2xl p-10 text-center border border-green-100 shadow-sm">
+                                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                            <svg className="w-8 h-8 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                            </svg>
+                                        </div>
+                                        <h3 className="text-xl font-bold text-green-800">頻道指標健康</h3>
+                                        <p className="text-base text-green-700 mt-2">目前沒有偵測到需要緊急優化的項目，內容轉換漏斗與留存率皆在合理範圍內。請繼續保持！</p>
+                                    </div>
+                                )
+                            )}
+                        </div>
+                    )}
+
                     {currentView === 'dashboard' && (
                         <div className="max-w-7xl mx-auto space-y-6">
 
-                            {/* Header Section */}
-                            <header className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100 gap-4">
-                                <div className="flex items-center gap-3">
-                                    <Activity className="text-indigo-600 w-8 h-8" />
-                                    <div>
-                                        <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 leading-tight">
-                                            Omnichannel War Room
-                                        </h1>
-                                        <p className="text-xs text-gray-400 font-medium">Data Sync via Supabase (Read-Only)</p>
-                                    </div>
+                            <div className="flex items-center gap-3 mb-4">
+                                <LayoutDashboard className="text-indigo-600 w-8 h-8" />
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-900">總覽與趨勢面板</h2>
+                                    <p className="text-sm text-gray-500">以宏觀視角檢視各大平台的大數據表現與互動指標</p>
                                 </div>
-
-                                <div className="flex gap-4">
-                                    <select
-                                        className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none transition-shadow hover:shadow-sm"
-                                        value={channelFilter}
-                                        onChange={(e) => setChannelFilter(e.target.value)}
-                                    >
-                                        <option value="all">所有頻道 (All Channels)</option>
-                                        {uniqueChannels.map(c => (
-                                            <option key={c.id} value={c.id}>{c.name}</option>
-                                        ))}
-                                    </select>
-
-                                    <select
-                                        className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none transition-shadow hover:shadow-sm"
-                                        value={sortBy}
-                                        onChange={(e) => setSortBy(e.target.value)}
-                                    >
-                                        <option value="timestamp">最新發布</option>
-                                        <option value="viralScore">爆發值最高</option>
-                                        <option value="er">互動率最高</option>
-                                    </select>
-
-                                    <button
-                                        onClick={fetchData}
-                                        disabled={isLoading}
-                                        className="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors border border-transparent disabled:opacity-50"
-                                        title="Refresh Data"
-                                    >
-                                        <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
-                                    </button>
-                                </div>
-                            </header>
-
-                            {/* 動態產生 AI 頻道運營優化建議 (根據選擇的頻道) */}
-                            {renderActionableInsights()}
-
-                            {/* Error Banner */}
-                            {error && (
-                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg flex items-start gap-3">
-                                    <AlertCircle className="text-red-500 w-5 h-5 flex-shrink-0 mt-0.5" />
-                                    <div>
-                                        <h3 className="text-red-800 font-medium">Connection Error</h3>
-                                        <p className="text-sm text-red-600 mt-1">{error}</p>
-                                        <p className="text-xs text-red-500 mt-2">Currently displaying simulated mock data.</p>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Schema Discovery View */}
-                            {data.length > 0 && !error && (
-                                <div className="bg-indigo-50 border border-indigo-200 p-6 rounded-2xl shadow-sm mb-6 max-h-96 overflow-auto">
-                                    <h2 className="text-lg font-bold text-indigo-900 mb-2 flex items-center gap-2">
-                                        <Layers className="w-5 h-5 text-indigo-500" />
-                                        資料庫 Schema 探測器 (Raw Data Preview)
-                                    </h2>
-                                    <p className="text-sm text-indigo-700 mb-4">
-                                        為了能依照您的實際欄位重新規劃 UI，請拷貝以下這筆資料，並貼給 AI！
-                                    </p>
-                                    <pre className="text-xs text-indigo-800 bg-white p-4 rounded-lg border border-indigo-100/50 shadow-inner overflow-x-auto">
-                                        {JSON.stringify(data[0], null, 2)}
-                                    </pre>
-                                </div>
-                            )}
+                            </div>
 
                             {/* KPI Cards */}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -585,20 +602,94 @@ export default function App() {
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    )}
 
-                            {/* Wall of Fame & Platform Dist */}
+                    {currentView === 'wall-of-fame' && (
+                        <div className="max-w-7xl mx-auto space-y-6">
+                            <div className="flex items-center gap-3 mb-6">
+                                <Flame className="text-orange-500 w-8 h-8" />
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-900">超級爆款金榜</h2>
+                                    <p className="text-sm text-gray-500">檢視系統從海量貼文中篩選出，互動爆發值超越均值兩倍標準差 (2 Std Dev) 的超限離群高成長內容。</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
+                                <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 content-start">
+                                    {isLoading ? (
+                                        <>
+                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
+                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
+                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
+                                        </>
+                                    ) : viralPosts.length > 0 ? (
+                                        viralPosts.map(post => (
+                                            <div key={post.id} className="relative overflow-hidden rounded-xl border border-orange-100/50 bg-gradient-to-br from-white to-orange-50/30 p-5 shadow-[0_4px_20px_-5px_rgba(249,115,22,0.15)] group hover:shadow-[0_6px_30px_-5px_rgba(249,115,22,0.3)] transition-all ease-out duration-300 hover:-translate-y-1 block">
+                                                <div className="absolute top-0 right-0 w-32 h-32 bg-orange-400/10 rounded-full blur-3xl -mr-12 -mt-12"></div>
+                                                <div className="flex items-start justify-between relative z-10">
+                                                    <div>
+                                                        <p className="text-[11px] font-bold text-gray-500 mb-1.5 uppercase letter-spacing-wider">{post.channels?.name || post.channelTitle || 'Unknown Channel'}</p>
+                                                        <h3 className="text-base font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h3>
+                                                    </div>
+                                                    <span className={`px-2.5 py-1 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm ml-2 shrink-0`}>
+                                                        {post.platform}
+                                                    </span>
+                                                </div>
+
+                                                {/* Tags Rendering in Wall of fame */}
+                                                {post.tags && post.tags.length > 0 && (
+                                                    <div className="mt-3 flex flex-wrap gap-1.5 relative z-10">
+                                                        {post.tags.slice(0, 4).map((tag: string, idx: number) => (
+                                                            <span key={idx} className="text-[11px] font-medium bg-white/80 text-orange-600 px-2 py-0.5 rounded-md border border-orange-100">#{tag.trim()}</span>
+                                                        ))}
+                                                        {post.tags.length > 4 && <span className="text-[11px] text-gray-400 font-medium self-center pl-1">+{post.tags.length - 4}</span>}
+                                                    </div>
+                                                )}
+
+                                                <div className="mt-5 flex items-end justify-between text-sm relative z-10">
+                                                    <div>
+                                                        <p className="text-[10px] text-gray-400 font-medium mb-0.5">總觀看</p>
+                                                        <div className="font-extrabold text-gray-800 text-lg leading-none">{(post.viewCount || 0).toLocaleString()}</div>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] text-orange-400/80 font-medium mb-0.5 text-right">爆發值</p>
+                                                        <div className="flex items-center gap-1.5 font-bold text-orange-600 bg-white border border-orange-100 px-2.5 py-1.5 rounded-lg shadow-sm">
+                                                            <Flame className="w-4 h-4" />
+                                                            {post.viralScore?.toLocaleString()} <span className="text-[10px] font-medium text-orange-400">/hr</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="col-span-full h-40 flex flex-col items-center justify-center text-gray-400 py-6">
+                                            <div className="w-14 h-14 rounded-full bg-gray-50 border-2 border-dashed border-gray-200 flex items-center justify-center mb-4">
+                                                <Flame className="w-6 h-6 text-gray-300" />
+                                            </div>
+                                            <p className="text-base font-medium">指定條件下尚未偵測到超越雙倍標準差的爆款</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {currentView === 'dashboard' && (
+                        <div className="max-w-7xl mx-auto space-y-6">
+                            {/* Dashboard Charts: Pie & Trend */}
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                                 {/* Platform Distribution Pie Chart */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-1">
-                                    <h2 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-1 flex flex-col">
+                                    <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
                                         平台流量佔比
                                     </h2>
                                     {isLoading ? (
-                                        <div className="h-[250px] flex items-center justify-center">
-                                            <div className="w-40 h-40 border-4 border-gray-100 border-t-indigo-500 rounded-full animate-spin"></div>
+                                        <div className="h-[300px] flex items-center justify-center">
+                                            <div className="w-20 h-20 border-4 border-gray-100 border-t-indigo-500 rounded-full animate-spin"></div>
                                         </div>
                                     ) : platformDistribution.length > 0 ? (
-                                        <div className="h-[250px] relative">
+                                        <div className="h-[300px] w-full relative">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
                                                     <Pie
@@ -621,92 +712,35 @@ export default function App() {
                                             </ResponsiveContainer>
                                         </div>
                                     ) : (
-                                        <div className="h-[250px] flex items-center justify-center text-gray-400">目前無數據</div>
+                                        <div className="h-[300px] flex items-center justify-center text-gray-400">目前無數據</div>
                                     )}
                                 </div>
 
-                                {/* Wall of Fame */}
+                                {/* Main Trend Chart */}
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-2 flex flex-col">
-                                    <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-                                        <Flame className="w-5 h-5 text-orange-500" />
-                                        超級爆款名人堂 <span className="text-xs font-normal text-gray-400 ml-2">(偏離平均 2 Std Dev)</span>
+                                    <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
+                                        <TrendingUp className="w-5 h-5 text-indigo-500" />
+                                        動態趨勢折線圖
                                     </h2>
-
-                                    <div className="flex-1 overflow-y-auto pr-2 grid gap-4 grid-cols-1 md:grid-cols-2 content-start">
-                                        {isLoading ? (
-                                            <>
-                                                <div className="h-24 bg-gray-100 rounded-xl animate-pulse"></div>
-                                                <div className="h-24 bg-gray-100 rounded-xl animate-pulse"></div>
-                                            </>
-                                        ) : viralPosts.length > 0 ? (
-                                            viralPosts.map(post => (
-                                                <div key={post.id} className="relative overflow-hidden rounded-xl border border-orange-100/50 bg-gradient-to-br from-white to-orange-50/30 p-4 shadow-[0_4px_20px_-5px_rgba(249,115,22,0.15)] group hover:shadow-[0_4px_25px_-5px_rgba(249,115,22,0.3)] transition-all">
-                                                    <div className="absolute top-0 right-0 w-24 h-24 bg-orange-400/10 rounded-full blur-2xl -mr-8 -mt-8"></div>
-                                                    <div className="flex items-start justify-between relative z-10">
-                                                        <div>
-                                                            <p className="text-xs font-bold text-gray-500 mb-1">{post.channels?.name || post.channelTitle || 'Unknown Channel'}</p>
-                                                            <h3 className="text-sm font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h3>
-                                                        </div>
-                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm m-1 shrink-0`}>
-                                                            {post.platform}
-                                                        </span>
-                                                    </div>
-
-                                                    {/* Tags Rendering in Wall of fame */}
-                                                    {post.tags && post.tags.length > 0 && (
-                                                        <div className="mt-2 flex flex-wrap gap-1 relative z-10">
-                                                            {post.tags.slice(0, 3).map((tag: string, idx: number) => (
-                                                                <span key={idx} className="text-[10px] bg-white/60 text-orange-600 px-1.5 py-0.5 rounded border border-orange-100/50">#{tag.trim()}</span>
-                                                            ))}
-                                                            {post.tags.length > 3 && <span className="text-[10px] text-gray-400">+{post.tags.length - 3}</span>}
-                                                        </div>
-                                                    )}
-
-                                                    <div className="mt-4 flex items-center justify-between text-sm relative z-10">
-                                                        <div className="font-semibold text-gray-700">{(post.viewCount || 0).toLocaleString()} <span className="text-xs font-normal text-gray-400">觀看</span></div>
-                                                        <div className="flex items-center gap-1.5 font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-md">
-                                                            <Flame className="w-3.5 h-3.5" />
-                                                            {post.viralScore?.toLocaleString()} <span className="text-xs font-normal text-orange-400">/hr</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))
-                                        ) : (
-                                            <div className="col-span-full h-full flex flex-col items-center justify-center text-gray-400 py-6">
-                                                <div className="w-12 h-12 rounded-full border border-dashed border-gray-300 flex items-center justify-center mb-3">
-                                                    <Flame className="w-5 h-5 text-gray-300" />
-                                                </div>
-                                                <p className="text-sm">尚未出現爆款內容</p>
-                                            </div>
-                                        )}
-                                    </div>
+                                    {isLoading ? (
+                                        <div className="h-[300px] w-full bg-gray-50 rounded-lg animate-pulse"></div>
+                                    ) : (
+                                        <div className="h-[300px] w-full">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <RechartsLineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} dy={10} />
+                                                    <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} tickFormatter={(val) => typeof val === 'number' && val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val} />
+                                                    <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
+                                                    <RechartsTooltip cursor={{ stroke: '#e5e7eb', strokeWidth: 2 }} contentStyle={{ borderRadius: '12px', border: '1px solid #f3f4f6', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                                                    <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
+                                                    <Line yAxisId="left" type="monotone" dataKey="Views" name="觀看數" stroke="#6366F1" strokeWidth={3} dot={{ r: 4, fill: '#6366F1', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                                                    <Line yAxisId="right" type="monotone" dataKey="ViralScore" name="總合爆發值" stroke="#F59E0B" strokeWidth={3} dot={{ r: 4, fill: '#F59E0B', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                                                </RechartsLineChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    )}
                                 </div>
-                            </div>
-
-                            {/* Main Trend Chart */}
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                                <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
-                                    <TrendingUp className="w-5 h-5 text-indigo-500" />
-                                    動態趨勢折線圖
-                                </h2>
-                                {isLoading ? (
-                                    <div className="h-[300px] w-full bg-gray-50 rounded-lg animate-pulse"></div>
-                                ) : (
-                                    <div className="h-[300px] w-full">
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <RechartsLineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} dy={10} />
-                                                <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} tickFormatter={(val) => typeof val === 'number' && val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val} />
-                                                <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                                                <RechartsTooltip cursor={{ stroke: '#e5e7eb', strokeWidth: 2 }} contentStyle={{ borderRadius: '12px', border: '1px solid #f3f4f6', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                                                <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
-                                                <Line yAxisId="left" type="monotone" dataKey="Views" name="觀看數" stroke="#6366F1" strokeWidth={3} dot={{ r: 4, fill: '#6366F1', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                                                <Line yAxisId="right" type="monotone" dataKey="ViralScore" name="總合爆發值" stroke="#F59E0B" strokeWidth={3} dot={{ r: 4, fill: '#F59E0B', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                                            </RechartsLineChart>
-                                        </ResponsiveContainer>
-                                    </div>
-                                )}
                             </div>
 
                             {/* Detailed Table */}
@@ -797,6 +831,76 @@ export default function App() {
                                 </div>
                             </div>
 
+                        </div>
+                    )}
+
+                    {currentView === 'wall-of-fame' && (
+                        <div className="max-w-7xl mx-auto space-y-6">
+                            <div className="flex items-center gap-3 mb-6">
+                                <Flame className="text-orange-500 w-8 h-8" />
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-900">超級爆款金榜</h2>
+                                    <p className="text-sm text-gray-500">檢視系統從海量貼文中篩選出，互動爆發值超越均值兩倍標準差 (2 Std Dev) 的超限離群高成長內容。</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
+                                <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 content-start">
+                                    {isLoading ? (
+                                        <>
+                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
+                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
+                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
+                                        </>
+                                    ) : viralPosts.length > 0 ? (
+                                        viralPosts.map(post => (
+                                            <div key={post.id} className="relative overflow-hidden rounded-xl border border-orange-100/50 bg-gradient-to-br from-white to-orange-50/30 p-5 shadow-[0_4px_20px_-5px_rgba(249,115,22,0.15)] group hover:shadow-[0_6px_30px_-5px_rgba(249,115,22,0.3)] transition-all ease-out duration-300 hover:-translate-y-1 block">
+                                                <div className="absolute top-0 right-0 w-32 h-32 bg-orange-400/10 rounded-full blur-3xl -mr-12 -mt-12"></div>
+                                                <div className="flex items-start justify-between relative z-10">
+                                                    <div>
+                                                        <p className="text-[11px] font-bold text-gray-500 mb-1.5 uppercase letter-spacing-wider">{post.channels?.name || post.channelTitle || 'Unknown Channel'}</p>
+                                                        <h3 className="text-base font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h3>
+                                                    </div>
+                                                    <span className={`px-2.5 py-1 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm ml-2 shrink-0`}>
+                                                        {post.platform}
+                                                    </span>
+                                                </div>
+
+                                                {/* Tags Rendering in Wall of fame */}
+                                                {post.tags && post.tags.length > 0 && (
+                                                    <div className="mt-3 flex flex-wrap gap-1.5 relative z-10">
+                                                        {post.tags.slice(0, 4).map((tag: string, idx: number) => (
+                                                            <span key={idx} className="text-[11px] font-medium bg-white/80 text-orange-600 px-2 py-0.5 rounded-md border border-orange-100">#{tag.trim()}</span>
+                                                        ))}
+                                                        {post.tags.length > 4 && <span className="text-[11px] text-gray-400 font-medium self-center pl-1">+{post.tags.length - 4}</span>}
+                                                    </div>
+                                                )}
+
+                                                <div className="mt-5 flex items-end justify-between text-sm relative z-10">
+                                                    <div>
+                                                        <p className="text-[10px] text-gray-400 font-medium mb-0.5">總觀看</p>
+                                                        <div className="font-extrabold text-gray-800 text-lg leading-none">{(post.viewCount || 0).toLocaleString()}</div>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] text-orange-400/80 font-medium mb-0.5 text-right">爆發值</p>
+                                                        <div className="flex items-center gap-1.5 font-bold text-orange-600 bg-white border border-orange-100 px-2.5 py-1.5 rounded-lg shadow-sm">
+                                                            <Flame className="w-4 h-4" />
+                                                            {post.viralScore?.toLocaleString()} <span className="text-[10px] font-medium text-orange-400">/hr</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="col-span-full h-40 flex flex-col items-center justify-center text-gray-400 py-6">
+                                            <div className="w-14 h-14 rounded-full bg-gray-50 border-2 border-dashed border-gray-200 flex items-center justify-center mb-4">
+                                                <Flame className="w-6 h-6 text-gray-300" />
+                                            </div>
+                                            <p className="text-base font-medium">指定條件下尚未偵測到超越雙倍標準差的爆款</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -956,8 +1060,8 @@ export default function App() {
                     )}
 
                 </main>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 }
 
