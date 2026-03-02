@@ -22,6 +22,8 @@ interface ChannelStat {
     custom_url?: string;
     ownerUsername?: string;
     url?: string;
+    timestamp?: string;
+    created_at?: string;
 }
 
 interface YoutubeReporting {
@@ -223,8 +225,8 @@ export default function App() {
         return Array.from(channelsMap.values());
     }, [channelDataList, platformFilter]);
 
-    // Apply Filters and Sorting
-    const filteredData = useMemo(() => {
+    // App.tsx 中負責過濾與彙整的核心邏輯
+    const historicalFilteredData = useMemo(() => {
         let result = [...data];
 
         if (platformFilter !== 'all') {
@@ -238,6 +240,24 @@ export default function App() {
             );
         }
 
+        return result;
+    }, [data, platformFilter, channelFilter]);
+
+    // 取「最新一筆」作為儀表板的現況指標與排行
+    const latestFilteredData = useMemo(() => {
+        const map = new Map<string, PostData>();
+        historicalFilteredData.forEach(d => {
+            const uniqueId = d.content_id || d.video_id || d.url || d.title || d.id;
+            const existing = map.get(uniqueId);
+            const tDate = d.timestamp ? new Date(d.timestamp).getTime() : 0;
+            const existingDate = existing && existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
+
+            if (!existing || tDate > existingDate) {
+                map.set(uniqueId, d);
+            }
+        });
+
+        const result = Array.from(map.values());
         result.sort((a, b) => {
             const timeA = new Date(a.timestamp ? String(a.timestamp) : 0).getTime();
             const timeB = new Date(b.timestamp ? String(b.timestamp) : 0).getTime();
@@ -245,40 +265,97 @@ export default function App() {
         });
 
         return result;
-    }, [data, platformFilter, channelFilter]);
+    }, [historicalFilteredData]);
 
-    // Calculate Outliers (2 std deviations) for Viral Score globally (or per filtered context)
-    const viralScores = filteredData.map(d => d.viralScore || 0);
+    const latestChannelStats = useMemo(() => {
+        const map = new Map<string, ChannelStat>();
+        channelDataList.forEach(c => {
+            const cid = c.id || c.channel_id;
+            if (!cid) return;
+            const existing = map.get(cid);
+            const tDate = c.timestamp || c.created_at || '';
+            const tDateNum = tDate ? new Date(tDate).getTime() : 0;
+            const existingDateNum = existing && (existing.timestamp || existing.created_at) ? new Date(existing.timestamp || existing.created_at || '').getTime() : 0;
+
+            if (!existing || tDateNum > existingDateNum) {
+                map.set(cid, c);
+            }
+        });
+
+        let result = Array.from(map.values());
+        if (platformFilter !== 'all') {
+            result = result.filter(c => (c.platform?.toLowerCase() || 'youtube') === platformFilter);
+        }
+        return result;
+    }, [channelDataList, platformFilter]);
+
+    // Calculate Outliers (2 std deviations) for Viral Score globally
+    const viralScores = latestFilteredData.map(d => d.viralScore || 0);
     const mean = viralScores.length > 0 ? viralScores.reduce((a, b) => a + b, 0) / viralScores.length : 0;
     const variance = viralScores.length > 0 ? viralScores.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / viralScores.length : 0;
     const stdDev = Math.sqrt(variance);
     const viralThreshold = mean + (2 * stdDev);
 
     const kpiData = {
-        totalViews: filteredData.reduce((acc, curr) => acc + (curr.viewCount || 0), 0),
-        avgER: (filteredData.reduce((acc, curr) => acc + (curr.er || 0), 0) / Math.max(filteredData.length, 1)).toFixed(2),
-        totalPosts: filteredData.length,
-        viralPosts: filteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length
+        totalViews: latestFilteredData.reduce((acc, curr) => acc + (curr.viewCount || 0), 0),
+        avgER: (latestFilteredData.reduce((acc, curr) => acc + (curr.er || 0), 0) / Math.max(latestFilteredData.length, 1)).toFixed(2),
+        totalPosts: latestFilteredData.length,
+        viralPosts: latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length
     };
 
-    // Prepare LineChart Data
-    const chartData = [...filteredData].sort((a, b) => {
-        const timeA = new Date(a.timestamp ? String(a.timestamp) : '').getTime();
-        const timeB = new Date(b.timestamp ? String(b.timestamp) : '').getTime();
-        return timeA - timeB;
-    }).map(d => {
-        const titleStr = d.title || '未命名內容';
-        return {
-            name: titleStr.length > 15 ? titleStr.substring(0, 15) + '...' : titleStr,
-            Views: d.viewCount || 0,
-            ViralScore: d.viralScore || 0
-        };
-    });
+    // Prepare LineChart Data (Historical Trend by Date)
+    const chartData = useMemo(() => {
+        const dayMap = new Map<number, Map<string, PostData>>();
+
+        historicalFilteredData.forEach(d => {
+            if (!d.timestamp) return;
+            const dTime = new Date(d.timestamp);
+            if (isNaN(dTime.getTime())) return;
+
+            const dayStart = new Date(dTime.getFullYear(), dTime.getMonth(), dTime.getDate()).getTime();
+
+            if (!dayMap.has(dayStart)) {
+                dayMap.set(dayStart, new Map<string, PostData>());
+            }
+
+            const videoMap = dayMap.get(dayStart)!;
+            const uniqueId = d.content_id || d.video_id || d.url || d.title || d.id;
+
+            const existing = videoMap.get(uniqueId);
+            const tDate = dTime.getTime();
+            const existingDate = existing && existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
+
+            if (!existing || tDate > existingDate) {
+                videoMap.set(uniqueId, d);
+            }
+        });
+
+        return Array.from(dayMap.entries())
+            .sort(([timeA], [timeB]) => timeA - timeB)
+            .map(([time, videoMap]) => {
+                const dateObj = new Date(time);
+                const dateStr = `${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
+
+                let sumViews = 0;
+                let sumViral = 0;
+                videoMap.forEach(v => {
+                    sumViews += (v.viewCount || 0);
+                    sumViral += (v.viralScore || 0);
+                });
+
+                return {
+                    name: dateStr,
+                    Views: sumViews,
+                    // 這裡的 ViralScore 代表當日所有影片爆發值的加總指標
+                    ViralScore: sumViral
+                };
+            });
+    }, [historicalFilteredData]);
 
     // Prepare PieChart Data for Platform Distribution
     const platformDistribution = useMemo(() => {
         const stats: Record<string, number> = {};
-        filteredData.forEach(d => {
+        latestFilteredData.forEach(d => {
             const plat = d.platform?.toLowerCase() || 'unknown';
             if (plat !== 'unknown') {
                 stats[plat] = (stats[plat] || 0) + (d.viewCount || 0);
@@ -290,13 +367,13 @@ export default function App() {
             value,
             fill: platformColors[key] || '#9ca3af'
         })).filter(item => item.value > 0);
-    }, [filteredData]);
+    }, [latestFilteredData]);
 
     // Prepare Tags Analytics Data
     const tagsStats = useMemo(() => {
         const tagMap: Record<string, { count: number; views: number; totalEr: number }> = {};
 
-        filteredData.forEach(post => {
+        latestFilteredData.forEach(post => {
             if (Array.isArray(post.tags) && post.tags.length > 0) {
                 post.tags.forEach(tag => {
                     if (!tag) return;
@@ -320,9 +397,9 @@ export default function App() {
             }))
             .sort((a, b) => b.views - a.views)
             .slice(0, 50); // 只取前 50 大標籤
-    }, [filteredData]);
+    }, [latestFilteredData]);
 
-    const viralPosts = filteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold);
+    const viralPosts = latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold);
 
     // AI Actionable Insights Generator (v2.0)
     const renderActionableInsights = () => {
@@ -539,7 +616,7 @@ export default function App() {
                     )}
 
                     {currentView === 'dashboard' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
+                        <div className="max-w-7xl mx-auto space-y-8">
 
                             <div className="flex items-center gap-3 mb-4">
                                 <LayoutDashboard className="text-indigo-600 w-8 h-8" />
@@ -677,7 +754,7 @@ export default function App() {
                     {currentView === 'dashboard' && (
                         <div className="max-w-7xl mx-auto space-y-6">
                             {/* Dashboard Charts: Pie & Trend */}
-                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-2">
                                 {/* Platform Distribution Pie Chart */}
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-1 flex flex-col">
                                     <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
@@ -766,8 +843,8 @@ export default function App() {
                                                 [...Array(3)].map((_, i) => (
                                                     <tr key={i} className="border-b border-gray-50"><td colSpan={5} className="px-6 py-4"><div className="h-10 bg-gray-100 rounded animate-pulse"></div></td></tr>
                                                 ))
-                                            ) : filteredData.length > 0 ? (
-                                                filteredData.map((item) => {
+                                            ) : latestFilteredData.length > 0 ? (
+                                                latestFilteredData.map((item) => {
                                                     const isViral = stdDev > 0 && (item.viralScore || 0) > viralThreshold;
                                                     return (
                                                         <tr key={item.id} className="bg-white border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
@@ -855,8 +932,8 @@ export default function App() {
                                     [...Array(3)].map((_, i) => (
                                         <div key={i} className="bg-white p-6 rounded-2xl border border-gray-100 h-40 animate-pulse"></div>
                                     ))
-                                ) : channelDataList.length > 0 ? (
-                                    channelDataList.map(ch => (
+                                ) : latestChannelStats.length > 0 ? (
+                                    latestChannelStats.map(ch => (
                                         <div key={ch.id || ch.channel_id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow group relative overflow-hidden">
                                             {/* 背景裝飾 */}
                                             <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-3xl -mr-10 -mt-10 opacity-20 ${platformBgColors[ch.platform?.toLowerCase() || 'youtube'] || 'bg-gray-300'}`}></div>
