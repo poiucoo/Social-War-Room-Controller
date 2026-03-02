@@ -597,6 +597,18 @@ export default function App() {
                                             const isChecked = selectedChannels.includes(c.id);
                                             return (
                                                 <label key={c.id} className={`flex items-center px-3 py-2.5 cursor-pointer rounded-lg mb-0.5 last:mb-0 transition-colors ${isChecked ? 'bg-indigo-50/60' : 'hover:bg-gray-50'}`}>
+                                                    <input
+                                                        type="checkbox"
+                                                        className="hidden"
+                                                        checked={isChecked}
+                                                        onChange={(e) => {
+                                                            if (e.target.checked) {
+                                                                setSelectedChannels(prev => [...prev, c.id]);
+                                                            } else {
+                                                                setSelectedChannels(prev => prev.filter(id => id !== c.id));
+                                                            }
+                                                        }}
+                                                    />
                                                     <div className={`mr-3 flex items-center justify-center w-4 h-4 rounded border transition-colors shrink-0 ${isChecked ? 'bg-indigo-500 border-indigo-500 shadow-sm' : 'border-gray-300 bg-white'}`}>
                                                         {isChecked && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
                                                     </div>
