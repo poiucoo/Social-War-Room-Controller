@@ -128,6 +128,8 @@ const platformBgColors: Record<string, string> = {
     threads: 'bg-[#000000]'
 };
 
+const CHART_COLORS = ['#6366F1', '#F59E0B', '#10B981', '#EC4899', '#8B5CF6', '#14B8A6', '#F43F5E', '#0EA5E9', '#84CC16', '#A855F7'];
+
 export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [currentView, setCurrentView] = useState<'dashboard' | 'insights' | 'channel' | 'wall-of-fame' | 'tags'>('dashboard');
@@ -213,16 +215,18 @@ export default function App() {
 
     // Extract unique channels with proper titles and platform filtering
     const uniqueChannels = useMemo(() => {
-        const channelsMap = new Map<string, { id: string, name: string, platform: string }>();
+        const titleMap = new Map<string, { id: string, name: string, platform: string }>();
         channelDataList.forEach(c => {
             const cid = c.id || c.channel_id;
             const ctitle = c.title || c.name || `頻道 ${cid}`;
             const cplatform = c.platform?.toLowerCase() || 'youtube';
             if (cid && (platformFilter === 'all' || platformFilter === cplatform)) {
-                channelsMap.set(cid, { id: cid, name: ctitle, platform: cplatform });
+                if (!titleMap.has(ctitle)) {
+                    titleMap.set(ctitle, { id: cid, name: ctitle, platform: cplatform });
+                }
             }
         });
-        return Array.from(channelsMap.values());
+        return Array.from(titleMap.values());
     }, [channelDataList, platformFilter]);
 
     // App.tsx 中負責過濾與彙整的核心邏輯
@@ -303,9 +307,10 @@ export default function App() {
         viralPosts: latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length
     };
 
-    // Prepare LineChart Data (Historical Trend by Date)
-    const chartData = useMemo(() => {
-        const dayMap = new Map<number, Map<string, PostData>>();
+    // Prepare LineChart Data (Historical Trend by Date & Entity)
+    const { chartData, chartLines } = useMemo(() => {
+        const dayMap = new Map<number, any>();
+        const linesSet = new Set<string>();
 
         historicalFilteredData.forEach(d => {
             if (!d.timestamp) return;
@@ -315,42 +320,35 @@ export default function App() {
             const dayStart = new Date(dTime.getFullYear(), dTime.getMonth(), dTime.getDate()).getTime();
 
             if (!dayMap.has(dayStart)) {
-                dayMap.set(dayStart, new Map<string, PostData>());
+                dayMap.set(dayStart, { timestamp: dayStart });
             }
 
-            const videoMap = dayMap.get(dayStart)!;
-            const uniqueId = d.content_id || d.video_id || d.url || d.title || d.id;
+            const dayObj = dayMap.get(dayStart)!;
 
-            const existing = videoMap.get(uniqueId);
-            const tDate = dTime.getTime();
-            const existingDate = existing && existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
-
-            if (!existing || tDate > existingDate) {
-                videoMap.set(uniqueId, d);
+            // 如果選了所有頻道，則以「頻道」為單位畫線；若已選定單一頻道，則以「影片標題」為單位畫線
+            let lineKey = '未命名';
+            if (channelFilter === 'all') {
+                lineKey = d.channels?.name || d.channelTitle || `頻道 ${d.channel_id}`;
+            } else {
+                lineKey = d.title || '未命名影片';
             }
+            if (lineKey.length > 20) lineKey = lineKey.substring(0, 20) + '...';
+
+            linesSet.add(lineKey);
+            // 累加該特徵主體的當日總觀看
+            dayObj[lineKey] = (dayObj[lineKey] || 0) + (d.viewCount || 0);
         });
 
-        return Array.from(dayMap.entries())
-            .sort(([timeA], [timeB]) => timeA - timeB)
-            .map(([time, videoMap]) => {
-                const dateObj = new Date(time);
+        const sortedData = Array.from(dayMap.values())
+            .sort((a, b) => a.timestamp - b.timestamp)
+            .map(obj => {
+                const dateObj = new Date(obj.timestamp);
                 const dateStr = `${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
-
-                let sumViews = 0;
-                let sumViral = 0;
-                videoMap.forEach(v => {
-                    sumViews += (v.viewCount || 0);
-                    sumViral += (v.viralScore || 0);
-                });
-
-                return {
-                    name: dateStr,
-                    Views: sumViews,
-                    // 這裡的 ViralScore 代表當日所有影片爆發值的加總指標
-                    ViralScore: sumViral
-                };
+                return { name: dateStr, ...obj };
             });
-    }, [historicalFilteredData]);
+
+        return { chartData: sortedData, chartLines: Array.from(linesSet) };
+    }, [historicalFilteredData, channelFilter]);
 
     // Prepare PieChart Data for Platform Distribution
     const platformDistribution = useMemo(() => {
@@ -806,12 +804,15 @@ export default function App() {
                                                 <RechartsLineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                                                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} dy={10} />
-                                                    <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} tickFormatter={(val) => typeof val === 'number' && val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val} />
-                                                    <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
+                                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} tickFormatter={(val) => typeof val === 'number' && val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val} />
                                                     <RechartsTooltip cursor={{ stroke: '#e5e7eb', strokeWidth: 2 }} contentStyle={{ borderRadius: '12px', border: '1px solid #f3f4f6', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
                                                     <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
-                                                    <Line yAxisId="left" type="monotone" dataKey="Views" name="觀看數" stroke="#6366F1" strokeWidth={3} dot={{ r: 4, fill: '#6366F1', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                                                    <Line yAxisId="right" type="monotone" dataKey="ViralScore" name="總合爆發值" stroke="#F59E0B" strokeWidth={3} dot={{ r: 4, fill: '#F59E0B', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                                                    {chartLines.map((lineKey, idx) => {
+                                                        const color = CHART_COLORS[idx % CHART_COLORS.length];
+                                                        return (
+                                                            <Line key={lineKey} type="monotone" dataKey={lineKey} name={lineKey} stroke={color} strokeWidth={3} dot={{ r: 4, fill: color, strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                                                        );
+                                                    })}
                                                 </RechartsLineChart>
                                             </ResponsiveContainer>
                                         </div>
