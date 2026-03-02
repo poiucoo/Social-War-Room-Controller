@@ -141,7 +141,6 @@ export default function App() {
 
     const fetchData = async () => {
         setIsLoading(true);
-        setError(null);
         try {
             // 查詢 daily_video_stats 並關聯 daily_channel_stats 取得頻道名稱
             const { data: videoData, error: videoError } = await supabase
@@ -834,75 +833,7 @@ export default function App() {
                         </div>
                     )}
 
-                    {currentView === 'wall-of-fame' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            <div className="flex items-center gap-3 mb-6">
-                                <Flame className="text-orange-500 w-8 h-8" />
-                                <div>
-                                    <h2 className="text-2xl font-bold text-gray-900">超級爆款金榜</h2>
-                                    <p className="text-sm text-gray-500">檢視系統從海量貼文中篩選出，互動爆發值超越均值兩倍標準差 (2 Std Dev) 的超限離群高成長內容。</p>
-                                </div>
-                            </div>
 
-                            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
-                                <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 content-start">
-                                    {isLoading ? (
-                                        <>
-                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
-                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
-                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
-                                        </>
-                                    ) : viralPosts.length > 0 ? (
-                                        viralPosts.map(post => (
-                                            <div key={post.id} className="relative overflow-hidden rounded-xl border border-orange-100/50 bg-gradient-to-br from-white to-orange-50/30 p-5 shadow-[0_4px_20px_-5px_rgba(249,115,22,0.15)] group hover:shadow-[0_6px_30px_-5px_rgba(249,115,22,0.3)] transition-all ease-out duration-300 hover:-translate-y-1 block">
-                                                <div className="absolute top-0 right-0 w-32 h-32 bg-orange-400/10 rounded-full blur-3xl -mr-12 -mt-12"></div>
-                                                <div className="flex items-start justify-between relative z-10">
-                                                    <div>
-                                                        <p className="text-[11px] font-bold text-gray-500 mb-1.5 uppercase letter-spacing-wider">{post.channels?.name || post.channelTitle || 'Unknown Channel'}</p>
-                                                        <h3 className="text-base font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h3>
-                                                    </div>
-                                                    <span className={`px-2.5 py-1 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm ml-2 shrink-0`}>
-                                                        {post.platform}
-                                                    </span>
-                                                </div>
-
-                                                {/* Tags Rendering in Wall of fame */}
-                                                {post.tags && post.tags.length > 0 && (
-                                                    <div className="mt-3 flex flex-wrap gap-1.5 relative z-10">
-                                                        {post.tags.slice(0, 4).map((tag: string, idx: number) => (
-                                                            <span key={idx} className="text-[11px] font-medium bg-white/80 text-orange-600 px-2 py-0.5 rounded-md border border-orange-100">#{tag.trim()}</span>
-                                                        ))}
-                                                        {post.tags.length > 4 && <span className="text-[11px] text-gray-400 font-medium self-center pl-1">+{post.tags.length - 4}</span>}
-                                                    </div>
-                                                )}
-
-                                                <div className="mt-5 flex items-end justify-between text-sm relative z-10">
-                                                    <div>
-                                                        <p className="text-[10px] text-gray-400 font-medium mb-0.5">總觀看</p>
-                                                        <div className="font-extrabold text-gray-800 text-lg leading-none">{(post.viewCount || 0).toLocaleString()}</div>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[10px] text-orange-400/80 font-medium mb-0.5 text-right">爆發值</p>
-                                                        <div className="flex items-center gap-1.5 font-bold text-orange-600 bg-white border border-orange-100 px-2.5 py-1.5 rounded-lg shadow-sm">
-                                                            <Flame className="w-4 h-4" />
-                                                            {post.viralScore?.toLocaleString()} <span className="text-[10px] font-medium text-orange-400">/hr</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <div className="col-span-full h-40 flex flex-col items-center justify-center text-gray-400 py-6">
-                                            <div className="w-14 h-14 rounded-full bg-gray-50 border-2 border-dashed border-gray-200 flex items-center justify-center mb-4">
-                                                <Flame className="w-6 h-6 text-gray-300" />
-                                            </div>
-                                            <p className="text-base font-medium">指定條件下尚未偵測到超越雙倍標準差的爆款</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     {/* Render Channel Overview */}
                     {currentView === 'channel' && (
