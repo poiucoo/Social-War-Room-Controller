@@ -77,6 +77,8 @@ interface PostData {
     er?: number;
     hoursSincePublished?: number;
 
+    youtubeMetrics?: YoutubeReporting;
+
     [key: string]: any;
 }
 
@@ -189,9 +191,13 @@ export default function App() {
                     const cid = item.channel_id || item.channelId;
                     const matchedChannel = channelMap.get(cid) || { id: cid || 'unknown', name: `頻道 ${cid || '未知'}` };
 
+                    const vid = item.content_id || item.video_id || item.url?.split('v=')[1] || item.id;
+                    const ytReport = (reportingData || []).find((r: any) => r.video_id === vid);
+
                     return calculateMetrics({
                         ...item,
-                        channels: matchedChannel
+                        channels: matchedChannel,
+                        youtubeMetrics: ytReport
                     });
                 });
                 setData(processedData);
@@ -304,7 +310,9 @@ export default function App() {
         totalViews: latestFilteredData.reduce((acc, curr) => acc + (curr.viewCount || 0), 0),
         avgER: (latestFilteredData.reduce((acc, curr) => acc + (curr.er || 0), 0) / Math.max(latestFilteredData.length, 1)).toFixed(2),
         totalPosts: latestFilteredData.length,
-        viralPosts: latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length
+        viralPosts: latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length,
+        totalWatchTime: latestFilteredData.reduce((acc, curr) => acc + (curr.youtubeMetrics?.watch_time_minutes || 0), 0),
+        totalNetSubs: latestFilteredData.reduce((acc, curr) => acc + ((curr.youtubeMetrics?.subscribers_gained || 0) - (curr.youtubeMetrics?.subscribers_lost || 0)), 0),
     };
 
     // Prepare LineChart Data (Historical Trend by Date & Entity)
@@ -625,7 +633,7 @@ export default function App() {
                             </div>
 
                             {/* KPI Cards */}
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
                                     <div>
                                         <p className="text-sm font-medium text-gray-500 mb-1">總觀看數</p>
@@ -675,6 +683,34 @@ export default function App() {
                                         <Flame className="w-6 h-6" />
                                     </div>
                                 </div>
+
+                                {platformFilter === 'youtube' && (
+                                    <>
+                                        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 p-6 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
+                                            <div>
+                                                <p className="text-sm font-medium text-indigo-800 mb-1">總觀看時長 (分)</p>
+                                                {isLoading ? <div className="h-9 w-20 bg-indigo-200/50 rounded animate-pulse"></div> : (
+                                                    <p className="text-3xl font-bold text-indigo-900">{kpiData.totalWatchTime.toLocaleString()}</p>
+                                                )}
+                                            </div>
+                                            <div className="p-3 bg-white text-indigo-600 rounded-xl shadow-sm">
+                                                <Activity className="w-6 h-6" />
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-6 rounded-2xl shadow-sm border border-emerald-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
+                                            <div>
+                                                <p className="text-sm font-medium text-emerald-800 mb-1">淨訂閱成長</p>
+                                                {isLoading ? <div className="h-9 w-16 bg-emerald-200/50 rounded animate-pulse"></div> : (
+                                                    <p className="text-3xl font-bold text-emerald-900">+{kpiData.totalNetSubs.toLocaleString()}</p>
+                                                )}
+                                            </div>
+                                            <div className="p-3 bg-white text-emerald-600 rounded-xl shadow-sm">
+                                                <TrendingUp className="w-6 h-6" />
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
                     )}
@@ -835,6 +871,7 @@ export default function App() {
                                                 <th className="px-6 py-4 font-semibold whitespace-nowrap">頻道與內容</th>
                                                 <th className="px-6 py-4 font-semibold whitespace-nowrap">發布時間</th>
                                                 <th className="px-6 py-4 font-semibold">觀看 / 互動</th>
+                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">深度成效 (YT)</th>
                                                 <th className="px-6 py-4 font-semibold whitespace-nowrap">健康度 (ER)</th>
                                                 <th className="px-6 py-4 font-semibold text-right">爆發指標</th>
                                             </tr>
@@ -882,6 +919,17 @@ export default function App() {
                                                                     <span title="Likes">👍 {item.likeCount || 0}</span>
                                                                     <span title="Comments">💬 {item.commentCount || 0}</span>
                                                                 </div>
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                                {item.youtubeMetrics ? (
+                                                                    <div className="flex flex-col gap-1.5 text-xs text-gray-500 font-medium">
+                                                                        <div className="flex items-center gap-1.5" title="總觀看時長(分鐘)">⏱️ {item.youtubeMetrics.watch_time_minutes?.toLocaleString() || 0} 分鐘</div>
+                                                                        <div className="flex items-center gap-1.5" title="平均觀看時長(秒)">👁️ {item.youtubeMetrics.average_view_duration_seconds?.toLocaleString() || 0} 秒</div>
+                                                                        <div className="flex items-center gap-1.5" title="淨訂閱成長">📈 <span className="text-green-600">+{(item.youtubeMetrics.subscribers_gained || 0) - (item.youtubeMetrics.subscribers_lost || 0)}</span></div>
+                                                                    </div>
+                                                                ) : (
+                                                                    <span className="text-gray-300 italic text-[10px] bg-gray-50 px-2 py-0.5 rounded border border-gray-100">無深度數據</span>
+                                                                )}
                                                             </td>
                                                             <td className="px-6 py-4">
                                                                 <span className={`inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-full ${(item.er || 0) > 10 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
