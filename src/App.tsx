@@ -8,6 +8,44 @@ interface Channel {
     name: string;
 }
 
+interface ChannelStat {
+    id: string;
+    channel_id: string;
+    title: string;
+    subscribers?: number;
+    followsCount?: number;
+    total_views?: number;
+    video_count?: number;
+    igtvVideoCount?: number;
+    platform?: string;
+    name?: string;
+    custom_url?: string;
+    ownerUsername?: string;
+    url?: string;
+}
+
+interface YoutubeReporting {
+    id: string | number;
+    date: number;
+    channel_id: string;
+    video_id: string;
+    views: number;
+    watch_time_minutes: number;
+    average_view_duration_seconds: number;
+    subscribers_gained: number;
+    subscribers_lost: number;
+    likes: number;
+    comments: number;
+    shares: number;
+}
+
+// 預設頻道分類映射表
+const channelTypeMap: Record<string, { label: string, color: string, bg: string }> = {
+    'Ishaan': { label: '網賺 Business', color: 'text-amber-700', bg: 'bg-amber-100' },
+    'Aarav': { label: '體育 Sports', color: 'text-blue-700', bg: 'bg-blue-100' },
+    'Arman': { label: '故事 Story', color: 'text-purple-700', bg: 'bg-purple-100' }
+};
+
 interface PostData {
     id: string;
     channel_id: string;
@@ -93,7 +131,9 @@ export default function App() {
     const [currentView, setCurrentView] = useState<'dashboard' | 'channel' | 'tags'>('dashboard');
 
     const [data, setData] = useState<PostData[]>([]);
-    const [channelDataList, setChannelDataList] = useState<any[]>([]); // 追加儲存所有頻道的原始資料
+    const [channelDataList, setChannelDataList] = useState<ChannelStat[]>([]);
+    const [youtubeReports, setYoutubeReports] = useState<YoutubeReporting[]>([]);
+
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -116,6 +156,19 @@ export default function App() {
                 .select('*');
 
             if (channelError) throw channelError;
+
+            // 抓取 youtube_reporting 詳細資料
+            const { data: reportingData, error: reportingError } = await supabase
+                .from('youtube_reporting')
+                .select('*')
+                .gte('views', 0); // 基本過濾，確保有資料
+
+            if (reportingError) {
+                console.warn('youtube_reporting fetch failed:', reportingError);
+                // 不要因為這個錯就中斷整個戰情室
+            } else {
+                setYoutubeReports(reportingData || []);
+            }
 
             // 建立 Channel Dictionary
             const channelMap = new Map();
@@ -273,6 +326,53 @@ export default function App() {
 
     const viralPosts = filteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold);
 
+    // AI Actionable Insights Generator (v2.0)
+    const renderActionableInsights = () => {
+        if (channelFilter === 'all' || channelFilter === '') return null;
+        const selectedChannelReports = youtubeReports.filter(r => r.channel_id === channelFilter);
+        if (selectedChannelReports.length === 0) return null;
+
+        // Rule 1: Retention Alert (Avg duration < 30 sec on videos with > 100 views)
+        const lowRetention = selectedChannelReports.some(r => r.views > 100 && r.average_view_duration_seconds < 30);
+
+        // Rule 2: Subscription Funnel (Views > 500 but gaining < 2 subscribers)
+        const lowConversion = selectedChannelReports.some(r => r.views > 500 && r.subscribers_gained < 2);
+
+        if (!lowRetention && !lowConversion) return null;
+
+        return (
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6 shadow-[0_4px_20px_-5px_rgba(251,191,36,0.2)] mb-6 transform transition-all duration-500 ease-out translate-y-0 opacity-100">
+                <h3 className="text-xl font-bold text-amber-800 flex items-center gap-2 mb-4">
+                    ✨ AI 運營優化建議清單 (Actionable Insights)
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {lowRetention && (
+                        <div className="bg-white/80 p-4 rounded-xl border border-amber-100 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
+                            <div className="bg-red-100 text-red-600 p-2.5 rounded-lg shrink-0">
+                                <AlertCircle className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-gray-900 text-base">⚠️ 鉤子失效警告 (Retention Drop)</h4>
+                                <p className="text-sm text-gray-600 mt-1.5 leading-relaxed">偵測到部分爆款影片平均觀看秒數過低，建議優先優化影片前 3 秒 Hook，或大刀闊斧剪去冗長開頭片段，避免被演算法降流。</p>
+                            </div>
+                        </div>
+                    )}
+                    {lowConversion && (
+                        <div className="bg-white/80 p-4 rounded-xl border border-amber-100 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
+                            <div className="bg-blue-100 text-blue-600 p-2.5 rounded-lg shrink-0">
+                                <MousePointerClick className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-gray-900 text-base">💡 高曝光缺乏轉換 (Sub Funnel)</h4>
+                                <p className="text-sm text-gray-600 mt-1.5 leading-relaxed">偵測到部分影片獲得大量曝光觀看卻未能轉化成有效粉絲。建議在這些破播影片的片尾、以及留言區置頂加入明確的 Call to Action (CTA) 訂閱呼籲。</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="flex h-screen bg-gray-50/50 font-sans overflow-hidden">
 
@@ -401,6 +501,9 @@ export default function App() {
                                     </button>
                                 </div>
                             </header>
+
+                            {/* 動態產生 AI 頻道運營優化建議 (根據選擇的頻道) */}
+                            {renderActionableInsights()}
 
                             {/* Error Banner */}
                             {error && (
@@ -721,14 +824,21 @@ export default function App() {
                                     channelDataList.map(ch => (
                                         <div key={ch.id || ch.channel_id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow group relative overflow-hidden">
                                             {/* 背景裝飾 */}
-                                            <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-3xl -mr-10 -mt-10 opacity-20 ${platformBgColors[ch.platform?.toLowerCase()] || 'bg-gray-300'}`}></div>
+                                            <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-3xl -mr-10 -mt-10 opacity-20 ${platformBgColors[ch.platform?.toLowerCase() || 'youtube'] || 'bg-gray-300'}`}></div>
 
                                             <div className="flex justify-between items-start mb-4 relative z-10">
                                                 <div>
-                                                    <h3 className="font-bold text-gray-900 text-lg mb-1">{ch.title || ch.name || '未命名頻道'}</h3>
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <h3 className="font-bold text-gray-900 text-lg">{ch.title || ch.name || '未命名頻道'}</h3>
+                                                        {ch.title && channelTypeMap[ch.title.split(' ')[0]] && (
+                                                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded shadow-sm ${channelTypeMap[ch.title.split(' ')[0]].color} ${channelTypeMap[ch.title.split(' ')[0]].bg}`}>
+                                                                {channelTypeMap[ch.title.split(' ')[0]].label}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[ch.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm`}>
-                                                            {ch.platform || '未知'}
+                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[ch.platform?.toLowerCase() || 'youtube'] || 'bg-gray-500'} shadow-sm`}>
+                                                            {ch.platform || 'youtube'}
                                                         </span>
                                                         {(ch.custom_url || ch.ownerUsername) && (
                                                             <span className="text-xs text-gray-400 font-medium">{ch.custom_url || `@${ch.ownerUsername}`}</span>
