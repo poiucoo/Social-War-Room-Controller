@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Activity, TrendingUp, List, Eye, MousePointerClick, Layers, Flame, AlertCircle, RefreshCw, LayoutDashboard, LineChart, Hash, Menu, X, ExternalLink } from 'lucide-react';
 import { supabase } from './lib/supabase';
@@ -183,7 +183,11 @@ export default function App() {
         }
 
         result.sort((a, b) => {
-            if (sortBy === 'timestamp') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+            if (sortBy === 'timestamp') {
+                const timeA = new Date(a.timestamp ? String(a.timestamp) : 0).getTime();
+                const timeB = new Date(b.timestamp ? String(b.timestamp) : 0).getTime();
+                return timeB - timeA;
+            }
             if (sortBy === 'viralScore') return (b.viralScore || 0) - (a.viralScore || 0);
             if (sortBy === 'er') return (b.er || 0) - (a.er || 0);
             return 0;
