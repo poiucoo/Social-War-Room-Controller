@@ -225,10 +225,11 @@ export default function App() {
         channelDataList.forEach(c => {
             const cid = c.id || c.channel_id;
             const ctitle = c.title || c.name || `頻道 ${cid}`;
+            const normalizedTitle = ctitle.trim().toLowerCase();
             const cplatform = c.platform?.toLowerCase() || 'youtube';
             if (cid && (platformFilter === 'all' || platformFilter === cplatform)) {
-                if (!titleMap.has(ctitle)) {
-                    titleMap.set(ctitle, { id: cid, name: ctitle, platform: cplatform });
+                if (!titleMap.has(normalizedTitle)) {
+                    titleMap.set(normalizedTitle, { id: cid, name: ctitle, platform: cplatform });
                 }
             }
         });
@@ -278,21 +279,21 @@ export default function App() {
     }, [historicalFilteredData]);
 
     const latestChannelStats = useMemo(() => {
-        const map = new Map<string, ChannelStat>();
+        const titleMap = new Map<string, ChannelStat>();
         channelDataList.forEach(c => {
-            const cid = c.id || c.channel_id;
-            if (!cid) return;
-            const existing = map.get(cid);
-            const tDate = c.timestamp || c.created_at || '';
-            const tDateNum = tDate ? new Date(tDate).getTime() : 0;
-            const existingDateNum = existing && (existing.timestamp || existing.created_at) ? new Date(existing.timestamp || existing.created_at || '').getTime() : 0;
+            const ctitle = c.title || c.name || `頻道 ${c.id || c.channel_id}`;
+            const normalizedTitle = ctitle.trim().toLowerCase();
+
+            const existing = titleMap.get(normalizedTitle);
+            const tDateNum = new Date(c.timestamp || c.created_at || 0).getTime();
+            const existingDateNum = existing ? new Date(existing.timestamp || existing.created_at || 0).getTime() : 0;
 
             if (!existing || tDateNum > existingDateNum) {
-                map.set(cid, c);
+                titleMap.set(normalizedTitle, c);
             }
         });
 
-        let result = Array.from(map.values());
+        let result = Array.from(titleMap.values());
         if (platformFilter !== 'all') {
             result = result.filter(c => (c.platform?.toLowerCase() || 'youtube') === platformFilter);
         }
