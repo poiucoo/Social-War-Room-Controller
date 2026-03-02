@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Activity, TrendingUp, List, Eye, MousePointerClick, Layers, Flame, AlertCircle, RefreshCw, LayoutDashboard, LineChart, Hash, Menu, X, ExternalLink } from 'lucide-react';
+import { Activity, TrendingUp, List, Eye, MousePointerClick, Layers, Flame, AlertCircle, RefreshCw, LayoutDashboard, LineChart, Hash, Menu, X, ExternalLink, ChevronDown } from 'lucide-react';
 import { supabase } from './lib/supabase';
 
 interface Channel {
@@ -143,7 +143,8 @@ export default function App() {
     const [isLoading, setIsLoading] = useState(true);
 
     const [platformFilter, setPlatformFilter] = useState('all');
-    const [channelFilter, setChannelFilter] = useState('all');
+    const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+    const [isChannelDropdownOpen, setIsChannelDropdownOpen] = useState(false);
 
     const fetchData = async () => {
         setIsLoading(true);
@@ -180,7 +181,7 @@ export default function App() {
                 setChannelDataList(channelData); // 供給頻道概況使用
 
                 channelData.forEach((c: any) => {
-                    const cid = c.id || c.channel_id;
+                    const cid = c.channel_id;
                     if (cid) channelMap.set(cid, c);
                 });
             }
@@ -221,19 +222,19 @@ export default function App() {
 
     // Extract unique channels with proper titles and platform filtering
     const uniqueChannels = useMemo(() => {
-        const titleMap = new Map<string, { id: string, name: string, platform: string }>();
+        const map = new Map<string, { id: string, name: string, platform: string }>();
         channelDataList.forEach(c => {
-            const cid = c.id || c.channel_id;
+            const cid = c.channel_id;
+            if (!cid) return;
             const ctitle = c.title || c.name || `頻道 ${cid}`;
-            const normalizedTitle = ctitle.trim().toLowerCase();
             const cplatform = c.platform?.toLowerCase() || 'youtube';
-            if (cid && (platformFilter === 'all' || platformFilter === cplatform)) {
-                if (!titleMap.has(normalizedTitle)) {
-                    titleMap.set(normalizedTitle, { id: cid, name: ctitle, platform: cplatform });
+            if (platformFilter === 'all' || platformFilter === cplatform) {
+                if (!map.has(cid)) {
+                    map.set(cid, { id: cid, name: ctitle, platform: cplatform });
                 }
             }
         });
-        return Array.from(titleMap.values());
+        return Array.from(map.values());
     }, [channelDataList, platformFilter]);
 
     // App.tsx 中負責過濾與彙整的核心邏輯
@@ -244,15 +245,15 @@ export default function App() {
             result = result.filter(d => (d.platform?.toLowerCase() || 'youtube') === platformFilter);
         }
 
-        if (channelFilter !== 'all') {
+        if (selectedChannels.length > 0) {
             result = result.filter(d =>
-                (d.channels && d.channels.id === channelFilter) ||
-                d.channel_id === channelFilter
+                selectedChannels.includes(d.channels?.id || '') ||
+                selectedChannels.includes(d.channel_id || '')
             );
         }
 
         return result;
-    }, [data, platformFilter, channelFilter]);
+    }, [data, platformFilter, selectedChannels]);
 
     // 取「最新一筆」作為儀表板的現況指標與排行
     const latestFilteredData = useMemo(() => {
@@ -279,26 +280,29 @@ export default function App() {
     }, [historicalFilteredData]);
 
     const latestChannelStats = useMemo(() => {
-        const titleMap = new Map<string, ChannelStat>();
+        const map = new Map<string, ChannelStat>();
         channelDataList.forEach(c => {
-            const ctitle = c.title || c.name || `頻道 ${c.id || c.channel_id}`;
-            const normalizedTitle = ctitle.trim().toLowerCase();
+            const cid = c.channel_id;
+            if (!cid) return;
 
-            const existing = titleMap.get(normalizedTitle);
+            const existing = map.get(cid);
             const tDateNum = new Date(c.timestamp || c.created_at || 0).getTime();
             const existingDateNum = existing ? new Date(existing.timestamp || existing.created_at || 0).getTime() : 0;
 
             if (!existing || tDateNum > existingDateNum) {
-                titleMap.set(normalizedTitle, c);
+                map.set(cid, c);
             }
         });
 
-        let result = Array.from(titleMap.values());
+        let result = Array.from(map.values());
         if (platformFilter !== 'all') {
             result = result.filter(c => (c.platform?.toLowerCase() || 'youtube') === platformFilter);
         }
+        if (selectedChannels.length > 0) {
+            result = result.filter(c => selectedChannels.includes(c.channel_id || ''));
+        }
         return result;
-    }, [channelDataList, platformFilter]);
+    }, [channelDataList, platformFilter, selectedChannels]);
 
     // Calculate Outliers (2 std deviations) for Viral Score globally
     const viralScores = latestFilteredData.map(d => d.viralScore || 0);
@@ -334,9 +338,9 @@ export default function App() {
 
             const dayObj = dayMap.get(dayStart)!;
 
-            // 如果選了所有頻道，則以「頻道」為單位畫線；若已選定單一頻道，則以「影片標題」為單位畫線
+            // 如果沒選定任何頻道，則以「頻道」為單位畫線；若有選定，則以「影片標題」為單位畫線
             let lineKey = '未命名';
-            if (channelFilter === 'all') {
+            if (selectedChannels.length === 0) {
                 lineKey = d.channels?.name || d.channelTitle || `頻道 ${d.channel_id}`;
             } else {
                 lineKey = d.title || '未命名影片';
@@ -357,7 +361,7 @@ export default function App() {
             });
 
         return { chartData: sortedData, chartLines: Array.from(linesSet) };
-    }, [historicalFilteredData, channelFilter]);
+    }, [historicalFilteredData, selectedChannels]);
 
     // Prepare PieChart Data for Platform Distribution
     const platformDistribution = useMemo(() => {
@@ -410,8 +414,8 @@ export default function App() {
 
     // AI Actionable Insights Generator (v2.0)
     const renderActionableInsights = () => {
-        if (channelFilter === 'all' || channelFilter === '') return null;
-        const selectedChannelReports = youtubeReports.filter(r => r.channel_id === channelFilter);
+        if (selectedChannels.length === 0) return null;
+        const selectedChannelReports = youtubeReports.filter(r => selectedChannels.includes(r.channel_id || ''));
         if (selectedChannelReports.length === 0) return null;
 
         // Rule 1: Retention Alert (Avg duration < 30 sec on videos with > 100 views)
@@ -551,11 +555,11 @@ export default function App() {
 
                     <div className="flex gap-3 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
                         <select
-                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 p-2.5 outline-none font-medium min-w-[140px]"
+                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 hover:border-indigo-300 p-2.5 outline-none font-medium min-w-[140px] transition-colors shadow-sm"
                             value={platformFilter}
                             onChange={(e) => {
                                 setPlatformFilter(e.target.value);
-                                setChannelFilter('all'); // 換平台時重設頻道
+                                setSelectedChannels([]); // 換平台時重設頻道多選狀態
                             }}
                         >
                             <option value="all">所有平台 (綜效)</option>
@@ -564,16 +568,48 @@ export default function App() {
                             <option value="threads">Threads</option>
                         </select>
 
-                        <select
-                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 p-2.5 outline-none font-medium min-w-[180px]"
-                            value={channelFilter}
-                            onChange={(e) => setChannelFilter(e.target.value)}
-                        >
-                            <option value="all">所有頻道 (All Channels)</option>
-                            {uniqueChannels.map(c => (
-                                <option key={c.id} value={c.id}>{c.name}</option>
-                            ))}
-                        </select>
+                        {/* Custom Multiselect Channel Dropdown */}
+                        <div className="relative min-w-[200px]" onMouseLeave={() => setIsChannelDropdownOpen(false)}>
+                            <button
+                                onClick={() => setIsChannelDropdownOpen(!isChannelDropdownOpen)}
+                                className="bg-white border border-gray-200 text-gray-700 text-sm rounded-lg hover:border-indigo-300 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 p-2.5 outline-none font-medium w-full flex items-center justify-between transition-colors shadow-sm min-h-[42px]"
+                            >
+                                <span className="truncate pr-2 select-none">
+                                    {selectedChannels.length === 0 ? "所有頻道 (未篩選)" : `已選擇 ${selectedChannels.length} 個頻道`}
+                                </span>
+                                <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isChannelDropdownOpen ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {isChannelDropdownOpen && (
+                                <div className="absolute z-50 top-full mt-1.5 left-0 sm:right-auto right-0 sm:w-[260px] w-full min-w-[220px] bg-white border border-gray-200 rounded-xl shadow-xl max-h-[320px] flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                    <div className="bg-gray-50/80 p-2 border-b border-gray-100 flex gap-2 justify-between shrink-0">
+                                        <button onClick={() => setSelectedChannels(uniqueChannels.map(c => c.id))} className="text-xs text-indigo-600 hover:bg-indigo-50 px-2.5 py-1.5 rounded-md font-medium transition-colors border border-transparent hover:border-indigo-100 flex-1">
+                                            全選
+                                        </button>
+                                        <button onClick={() => setSelectedChannels([])} className="text-xs text-gray-500 hover:bg-gray-200/50 px-2.5 py-1.5 rounded-md font-medium transition-colors flex-1">
+                                            清除
+                                        </button>
+                                    </div>
+                                    <div className="overflow-y-auto flex-1 p-1 custom-scrollbar">
+                                        {uniqueChannels.length === 0 ? (
+                                            <div className="p-4 text-center text-sm text-gray-400">目前平台下無頻道資料</div>
+                                        ) : uniqueChannels.map(c => {
+                                            const isChecked = selectedChannels.includes(c.id);
+                                            return (
+                                                <label key={c.id} className={`flex items-center px-3 py-2.5 cursor-pointer rounded-lg mb-0.5 last:mb-0 transition-colors ${isChecked ? 'bg-indigo-50/60' : 'hover:bg-gray-50'}`}>
+                                                    <div className={`mr-3 flex items-center justify-center w-4 h-4 rounded border transition-colors shrink-0 ${isChecked ? 'bg-indigo-500 border-indigo-500 shadow-sm' : 'border-gray-300 bg-white'}`}>
+                                                        {isChecked && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                                                    </div>
+                                                    <span className={`text-sm truncate select-none ${isChecked ? 'font-semibold text-indigo-900' : 'text-gray-600'}`} title={c.name}>
+                                                        {c.name}
+                                                    </span>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
 
                         <button
                             onClick={fetchData}
@@ -600,11 +636,11 @@ export default function App() {
                                 </div>
                             </div>
 
-                            {channelFilter === 'all' ? (
+                            {selectedChannels.length === 0 ? (
                                 <div className="bg-amber-50 rounded-2xl p-10 text-center border border-amber-100 shadow-sm">
                                     <Activity className="w-16 h-16 text-amber-300 mx-auto mb-4" />
-                                    <h3 className="text-xl font-bold text-amber-800">請先於上方選擇特定單一頻道</h3>
-                                    <p className="text-base text-amber-700 mt-2">智能優化系統專注於解析單一頻道的生長軌跡，<br />請在螢幕右上方選擇您想深度優化的目標頻道來啟動 AI 運算。</p>
+                                    <h3 className="text-xl font-bold text-amber-800">請先於上方選擇目標頻道</h3>
+                                    <p className="text-base text-amber-700 mt-2">智能優化系統專注於解析頻道的生長軌跡，<br />請在螢幕右上方選擇您想深度優化的目標頻道來啟動 AI 運算。</p>
                                 </div>
                             ) : (
                                 renderActionableInsights() || (
