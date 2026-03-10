@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { Activity, TrendingUp, List, Eye, MousePointerClick, Layers, Flame, AlertCircle, RefreshCw, LayoutDashboard, LineChart, Hash, Menu, X, ExternalLink, ChevronDown } from 'lucide-react';
 import { supabase } from './lib/supabase';
 
@@ -134,7 +134,8 @@ const CHART_COLORS = ['#6366F1', '#F59E0B', '#10B981', '#EC4899', '#8B5CF6', '#1
 
 export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [currentView, setCurrentView] = useState<'dashboard' | 'insights' | 'channel' | 'wall-of-fame' | 'tags'>('dashboard');
+    const [currentView, setCurrentView] = useState<'dashboard' | 'insights' | 'channel' | 'wall-of-fame' | 'tags' | 'channel-analytics'>('dashboard');
+    const [selectedChannelTab, setSelectedChannelTab] = useState<string>('');
 
     const [data, setData] = useState<PostData[]>([]);
     const [channelDataList, setChannelDataList] = useState<ChannelStat[]>([]);
@@ -527,6 +528,22 @@ export default function App() {
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'tags' ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
                         <Hash className="w-5 h-5 flex-shrink-0" />
                         {isSidebarOpen && <span>熱門標籤分析</span>}
+                    </button>
+
+                    <button
+                        onClick={() => {
+                            setCurrentView('channel-analytics');
+                            setPlatformFilter('youtube'); // 自動切換為 YT
+                            // 預設選取第一個頻道作為 Tab
+                            if (uniqueChannels.length > 0 && !selectedChannelTab) {
+                                setSelectedChannelTab(uniqueChannels[0].id);
+                            }
+                        }}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'channel-analytics' ? 'bg-red-50 text-red-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                        <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                        </svg>
+                        {isSidebarOpen && <span>頻道與影片全分析</span>}
                     </button>
                 </nav>
 
@@ -1161,6 +1178,168 @@ export default function App() {
                                         </tbody>
                                     </table>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {currentView === 'channel-analytics' && (
+                        <div className="max-w-7xl mx-auto space-y-6">
+                            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-2">
+                                <div className="flex items-center gap-3">
+                                    <svg className="text-red-500 w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                                    </svg>
+                                    <div>
+                                        <h2 className="text-2xl font-bold text-gray-900">頻道與影片全分析</h2>
+                                        <p className="text-sm text-gray-500">統整基礎社群數據與 YouTube YouTube Analytics 深度維度</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Top Channel Tabs */}
+                            <div className="flex gap-2 overflow-x-auto pb-2 border-b border-gray-200 hide-scrollbar">
+                                {uniqueChannels
+                                    .filter(c => c.platform === 'youtube')
+                                    .map(c => (
+                                        <button
+                                            key={c.id}
+                                            onClick={() => setSelectedChannelTab(c.id)}
+                                            className={`px-4 py-2.5 whitespace-nowrap text-sm font-bold rounded-t-lg transition-colors border-b-2 ${selectedChannelTab === c.id || (uniqueChannels.length > 0 && !selectedChannelTab && uniqueChannels[0].id === c.id)
+                                                ? 'border-red-500 text-red-600 bg-red-50/50'
+                                                : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+                                                }`}
+                                        >
+                                            {c.name}
+                                        </button>
+                                    ))}
+                            </div>
+
+                            {/* Video Data List for Selected Tab */}
+                            <div className="space-y-4 relative">
+                                {latestFilteredData
+                                    .filter(d => {
+                                        const currentTab = selectedChannelTab || (uniqueChannels.find(c => c.platform === 'youtube')?.id);
+                                        return d.platform === 'youtube' && (d.channels?.id === currentTab || d.channel_id === currentTab);
+                                    })
+                                    .map(post => {
+                                        // Fake Retention Data for Sparkline based on Python tests
+                                        const isPeak1 = post.viewCount ? post.viewCount % 2 === 0 : false;
+                                        const mockSparkline = Array.from({ length: 20 }, (_, i) => {
+                                            const base = 100 - (i * 3); // 逐漸下滑
+                                            let val = Math.max(10, base + (Math.random() * 5 - 2));
+                                            // 模擬一個 drop
+                                            if (i === 5) val -= 15;
+                                            // 模擬一個 peak
+                                            if (isPeak1 && i === 12) val += 10;
+                                            return { progress: i * 5, retention: val };
+                                        });
+
+                                        return (
+                                            <div key={post.id} className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm hover:shadow-md transition-shadow grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+
+                                                {/* Col 1: Base Info */}
+                                                <div className="lg:col-span-4 flex gap-4">
+                                                    <div className="w-32 h-20 bg-gray-100 rounded-lg shrink-0 overflow-hidden relative group">
+                                                        {post.url ? (
+                                                            <img src={`https://img.youtube.com/vi/${post.url.split('v=')[1]}/mqdefault.jpg`} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = 'none'} />
+                                                        ) : (
+                                                            <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                                                                <svg className="w-8 h-8 text-gray-400" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" /></svg>
+                                                            </div>
+                                                        )}
+                                                        {post.url && (
+                                                            <a href={post.url} target="_blank" rel="noreferrer" className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <ExternalLink className="w-6 h-6 text-white" />
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex flex-col justify-center min-w-0">
+                                                        <h4 className="text-[15px] font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h4>
+                                                        <div className="flex items-center gap-2 mt-2">
+                                                            <span className="bg-red-50 text-red-600 text-xs px-2 py-0.5 rounded font-medium">YouTube</span>
+                                                            <span className="text-xs text-gray-400">{new Date(post.timestamp!).toLocaleDateString()}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Col 2: Social Metrics */}
+                                                <div className="lg:col-span-3 grid grid-cols-2 gap-y-3 gap-x-2 border-l border-gray-100 pl-4">
+                                                    <div>
+                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">總觀看</p>
+                                                        <p className="text-[15px] font-bold text-gray-800">{(post.viewCount || 0).toLocaleString()}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">互動率 ER</p>
+                                                        <p className="text-[15px] font-bold text-gray-800">{post.er}%</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">按讚</p>
+                                                        <p className="text-sm font-semibold text-gray-600">{(post.likeCount || 0).toLocaleString()}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">留言</p>
+                                                        <p className="text-sm font-semibold text-gray-600">{(post.commentCount || 0).toLocaleString()}</p>
+                                                    </div>
+                                                </div>
+
+                                                {/* Col 3: YouTube Deep Metrics */}
+                                                <div className="lg:col-span-2 space-y-3 border-l border-gray-100 pl-4">
+                                                    <div>
+                                                        <p className="text-[11px] text-indigo-400 font-bold mb-0.5 uppercase tracking-wide flex items-center gap-1">
+                                                            <Activity className="w-3 h-3" /> 均看時長
+                                                        </p>
+                                                        <p className="text-[15px] font-bold text-indigo-900">
+                                                            {post.youtubeMetrics?.average_view_duration_seconds
+                                                                ? `${Math.floor(post.youtubeMetrics.average_view_duration_seconds / 60)}分${Math.floor(post.youtubeMetrics.average_view_duration_seconds % 60)}秒`
+                                                                : '--'}
+                                                        </p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[11px] text-emerald-500 font-bold mb-0.5 uppercase tracking-wide flex items-center gap-1">
+                                                            <TrendingUp className="w-3 h-3" /> 淨增訂閱
+                                                        </p>
+                                                        <p className={`text-sm font-bold ${((post.youtubeMetrics?.subscribers_gained || 0) - (post.youtubeMetrics?.subscribers_lost || 0)) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                                                            {((post.youtubeMetrics?.subscribers_gained || 0) - (post.youtubeMetrics?.subscribers_lost || 0)) > 0 ? '+' : ''}{((post.youtubeMetrics?.subscribers_gained || 0) - (post.youtubeMetrics?.subscribers_lost || 0)) || '--'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+
+                                                {/* Col 4: Retention Sparkline */}
+                                                <div className="lg:col-span-3 border-l border-gray-100 pl-4 flex flex-col justify-center">
+                                                    <p className="text-[11px] text-gray-400 font-medium mb-1 flex items-center justify-between">
+                                                        <span>Audience Retention 觀眾留存曲線</span>
+                                                    </p>
+                                                    <div className="h-16 w-full -ml-2">
+                                                        <ResponsiveContainer width="100%" height="100%">
+                                                            <AreaChart data={mockSparkline} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
+                                                                <defs>
+                                                                    <linearGradient id={`colorRet${post.id}`} x1="0" y1="0" x2="0" y2="1">
+                                                                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
+                                                                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                                                                    </linearGradient>
+                                                                </defs>
+                                                                <Area type="monotone" dataKey="retention" stroke="#ef4444" strokeWidth={2} fill={`url(#colorRet${post.id})`} isAnimationActive={false} />
+                                                            </AreaChart>
+                                                        </ResponsiveContainer>
+                                                    </div>
+                                                </div>
+
+                                            </div>
+                                        )
+                                    })}
+
+                                {latestFilteredData.filter(d => {
+                                    const currentTab = selectedChannelTab || (uniqueChannels.find(c => c.platform === 'youtube')?.id);
+                                    return d.platform === 'youtube' && (d.channels?.id === currentTab || d.channel_id === currentTab);
+                                }).length === 0 && (
+                                        <div className="py-20 text-center">
+                                            <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" viewBox="0 0 24 24" fill="currentColor">
+                                                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                                            </svg>
+                                            <h3 className="text-lg font-bold text-gray-700">該頻道目前沒有影片資料</h3>
+                                            <p className="text-gray-500 mt-1">請等待資料庫同步或選擇其他頻道</p>
+                                        </div>
+                                    )}
                             </div>
                         </div>
                     )}
