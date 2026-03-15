@@ -1,1352 +1,745 @@
-import { useState, useEffect, useMemo } from 'react';
-import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
-import { Activity, TrendingUp, List, Eye, MousePointerClick, Layers, Flame, AlertCircle, RefreshCw, LayoutDashboard, LineChart, Hash, Menu, X, ExternalLink, ChevronDown } from 'lucide-react';
+﻿import { useState, useEffect, useMemo } from 'react';
+import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { AlertCircle, ChevronDown, ChevronUp, Hash, Loader2, Filter, Copy, CheckCircle2, Bookmark, Activity, Eye, ThumbsUp, Target, Menu, X, LayoutGrid, Database, BarChart2, RefreshCw, Focus } from 'lucide-react';
 import { supabase } from './lib/supabase';
+import Papa from 'papaparse';
+import { VideoDetailPanel } from './VideoDetailPanel';
 
-interface Channel {
-    id: string;
-    name: string;
-}
+const SHEET_URL = "https://docs.google.com/spreadsheets/d/184Kve5A6Dto51RLbgDON3Z2zODiVniWVcIlWi1gNAVg/export?format=csv&gid=1214765895";
 
-interface ChannelStat {
-    id: string;
-    channel_id: string;
-    title: string;
-    subscribers?: number;
-    followsCount?: number;
-    total_views?: number;
-    video_count?: number;
-    igtvVideoCount?: number;
-    platform?: string;
-    name?: string;
-    custom_url?: string;
-    ownerUsername?: string;
-    url?: string;
-    timestamp?: string;
-    created_at?: string;
-}
-
-interface YoutubeReporting {
-    id: string | number;
-    date: number;
-    channel_id: string;
-    video_id: string;
-    views: number;
-    watch_time_minutes: number;
-    average_view_duration_seconds: number;
-    subscribers_gained: number;
-    subscribers_lost: number;
-    likes: number;
-    comments: number;
-    shares: number;
-}
-
-// 預設頻道分類映射表
-const channelTypeMap: Record<string, { label: string, color: string, bg: string }> = {
-    'Ishaan': { label: '網賺 Business', color: 'text-amber-700', bg: 'bg-amber-100' },
-    'Aarav': { label: '體育 Sports', color: 'text-blue-700', bg: 'bg-blue-100' },
-    'Arman': { label: '故事 Story', color: 'text-purple-700', bg: 'bg-purple-100' }
+/** 
+ * 強力標準化字串：移除所有不可見字元、前後空格並轉大寫
+ * 用於徹底根除數據不一致導致的篩選失效
+ */
+const normalizeString = (str: any): string => {
+    if (!str) return "";
+    return String(str)
+        .replace(/[\u200B-\u200D\uFEFF]/g, '') // 移除零寬空格等隱形字元
+        .trim()
+        .toUpperCase();
 };
 
-interface PostData {
+interface VideoData {
     id: string;
-    channel_id: string;
-    channels?: Channel;
+    originalId: string;
+    sheetIndex: number; // 用於絕對唯一 ID 分辨
+    title: string;
+    channel: string;
     platform: string;
-    title: string;
-    description?: string;
-    tags?: string[];
-    url?: string;
-
-    // 真實的計數欄位
-    viewCount?: number;
-    likeCount?: number;
-    commentCount?: number;
-
-    // 為了向前相容與動態屬性
-    metrics?: {
-        views: number;
-        likes: number;
-        comments: number;
+    thumbnail: string;
+    publishedAt: string;
+    timestamp: number;
+    kpi: { views: number | string; likes: number | string; comments: number | string; watchTime: string; er: number | string; subs: number | string };
+    tags: string[];
+    retentionData: any[];
+    dropEvents: Array<{
+        timeIndex: number;
+        timeLabel: string;
+        severity: string;
+        slideInsights: {
+            role: string;
+            visual: string;
+            trigger: string;
+            aiSummary: string;
+            imageText: string;
+            videoPrompt: string;
+            strategy: string;
+        }
+    }>;
+    timelineData: Array<{ day: string; views: number; likes: number; saves: number; comments: number }>;
+    maxDuration: number;
+    depthMetrics?: {
+        averageRetention: number;
+        averageWatchTime: string;
+        endRetentionRate: number;
+        stayAbove90End: string;
+        stayAbove70End: string;
+        rewatchDropStart: string;
+        rewatchDropEnd: string;
+        rewatchDropSeverity: number;
+        coreDropStart: string;
+        coreDropEnd: string;
+        coreDropSeverity: number;
     };
-    publishedAt?: string;
-    timestamp?: string;
-
-    // 前端計算後的屬性
-    viralScore?: number;
-    er?: number;
-    hoursSincePublished?: number;
-
-    youtubeMetrics?: YoutubeReporting;
-
-    [key: string]: any;
+    hasRetention: boolean;
+    hasSlides: boolean;
 }
 
-const MOCK_DATA: PostData[] = [
-    { id: '1', channel_id: 'c1', channels: { id: 'c1', name: 'Tech Bro' }, platform: 'youtube', title: 'Vue.js vs React.js in 2026', content_id: 'v1', metrics: { views: 500000, likes: 25000, comments: 1200 }, timestamp: new Date(Date.now() - 24 * 3600 * 1000).toISOString() },
-    { id: '2', channel_id: 'c1', channels: { id: 'c1', name: 'Tech Bro' }, platform: 'instagram', title: 'Desk Setup Tour', content_id: 'v2', metrics: { views: 120000, likes: 10000, comments: 400 }, timestamp: new Date(Date.now() - 48 * 3600 * 1000).toISOString() },
-    { id: '3', channel_id: 'c2', channels: { id: 'c2', name: 'Design Daily' }, platform: 'threads', title: 'Why I left Figma', content_id: 'v3', metrics: { views: 80000, likes: 5000, comments: 2000 }, timestamp: new Date(Date.now() - 5 * 3600 * 1000).toISOString() },
-    { id: '4', channel_id: 'c2', channels: { id: 'c2', name: 'Design Daily' }, platform: 'youtube', title: 'UI Trends 2026', content_id: 'v4', metrics: { views: 200000, likes: 8000, comments: 500 }, timestamp: new Date(Date.now() - 72 * 3600 * 1000).toISOString() },
-];
-
-function calculateMetrics(item: any): PostData {
-    // 安全解析時間，優先取真實拿到的 publishedAt
-    const safeTimestamp = item.publishedAt || item.timestamp || item.created_at || new Date().toISOString();
-    const hoursSincePublished = Math.max(0.1, (Date.now() - new Date(safeTimestamp).getTime()) / (1000 * 3600));
-
-    // 通用流量提取：優先使用真實欄位 viewCount，若無則降級
-    const views = Number(item.viewCount) || item.metrics?.views || item.view_count || item.views || 0;
-    const likes = Number(item.likeCount) || item.metrics?.likes || item.like_count || item.likes || 0;
-    const comments = Number(item.commentCount) || item.metrics?.comments || item.comment_count || item.comments || 0;
-
-    const viralScore = Math.round(views / hoursSincePublished);
-    const er = views > 0 ? ((likes + comments) / views) * 100 : 0;
-
-    return {
-        ...item,
-        title: item.title || item.name || '未命名內容',
-        platform: item.platform || 'unknown',
-        timestamp: safeTimestamp,
-        viewCount: views,
-        likeCount: likes,
-        commentCount: comments,
-        viralScore,
-        er: parseFloat(er.toFixed(2)),
-        hoursSincePublished,
-        // 確保 tags 為陣列格式
-        tags: Array.isArray(item.tags) ? item.tags : (typeof item.tags === 'string' ? item.tags.split(',') : [])
-    };
-}
-
-const platformColors: Record<string, string> = {
-    youtube: '#FF0000',
-    instagram: '#E1306C',
-    threads: '#000000'
-};
-
-const platformBgColors: Record<string, string> = {
-    youtube: 'bg-[#FF0000]',
-    instagram: 'bg-[#E1306C]',
-    threads: 'bg-[#000000]'
-};
-
-const CHART_COLORS = ['#6366F1', '#F59E0B', '#10B981', '#EC4899', '#8B5CF6', '#14B8A6', '#F43F5E', '#0EA5E9', '#84CC16', '#A855F7'];
-
-export default function App() {
-    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [currentView, setCurrentView] = useState<'dashboard' | 'insights' | 'channel' | 'wall-of-fame' | 'tags' | 'channel-analytics'>('dashboard');
-    const [selectedChannelTab, setSelectedChannelTab] = useState<string>('');
-
-    const [data, setData] = useState<PostData[]>([]);
-    const [channelDataList, setChannelDataList] = useState<ChannelStat[]>([]);
-    const [youtubeReports, setYoutubeReports] = useState<YoutubeReporting[]>([]);
-
+export default function ContentAttributionEngine() {
+    const [expandedVideoId, setExpandedVideoId] = useState<string | null>(null);
+    const [copiedTitleId, setCopiedTitleId] = useState<string | null>(null);
+    const [videos, setVideos] = useState<VideoData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [activePlatforms, setActivePlatforms] = useState<string[]>([]);
+    const [activeChannels, setActiveChannels] = useState<string[]>([]);
+    const [allSlidesData, setAllSlidesData] = useState<any[]>([]);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+    const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(true);
+    const [onlyHasRetention, setOnlyHasRetention] = useState(false);
+    const [onlyHasSlides, setOnlyHasSlides] = useState(false);
 
-    const [platformFilter, setPlatformFilter] = useState('all');
-    const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
-    const [isChannelDropdownOpen, setIsChannelDropdownOpen] = useState(false);
+    // 使用 useMemo 快取過濾後的列表，確保在狀態切換時邏輯絕對精準
+    const filteredVideos = useMemo(() => {
+        return (videos || []).filter(v => {
+            const vPlat = normalizeString(v.platform);
+            const vChan = normalizeString(v.channel);
 
-    const fetchData = async () => {
-        setIsLoading(true);
+            const platformMatch = activePlatforms.length === 0 ||
+                activePlatforms.some(p => normalizeString(p) === vPlat);
+            const channelMatch = activeChannels.length === 0 ||
+                activeChannels.some(c => normalizeString(c) === vChan);
+
+            // 進階數據源過濾
+            const retentionMatch = !onlyHasRetention || v.hasRetention;
+            const slidesMatch = !onlyHasSlides || v.hasSlides;
+
+            return platformMatch && channelMatch && retentionMatch && slidesMatch;
+        });
+    }, [videos, activePlatforms, activeChannels, onlyHasRetention, onlyHasSlides]);
+
+    const toggleFilter = (item: string, setter: any) => {
+        setter((prev: string[]) => {
+            if (item === 'all') return [];
+            const normalizedItem = normalizeString(item);
+            if (prev.includes(normalizedItem)) {
+                return prev.filter(i => i !== normalizedItem);
+            } else {
+                return [...prev, normalizedItem];
+            }
+        });
+        setExpandedVideoId(null);
+    };
+
+
+
+    const syncData = async (manual = false) => {
         try {
-            // 查詢 daily_video_stats 並關聯 daily_channel_stats 取得頻道名稱
-            const { data: videoData, error: videoError } = await supabase
-                .from('daily_video_stats')
-                .select('*');
+            if (manual) setIsSyncing(true);
+            else setIsLoading(true);
 
-            if (videoError) throw videoError;
+            // 1. Fetch Supabase DB: Retention (Drops) & Slides (Visual elements) & Tags
+            const { data: retData } = await supabase.from('yt_retention_analysis').select('*');
+            const { data: slidesData } = await supabase.from('video_slides_analysis').select('*');
+            const { data: tagsData } = await supabase.from('video_strategy_labels').select('*');
+            if (slidesData) setAllSlidesData(slidesData);
 
-            const { data: channelData, error: channelError } = await supabase
-                .from('daily_channel_stats')
-                .select('*');
+            // 2. Fetch Google Sheet Data (KPIs and Base Info)
+            const res = await fetch(SHEET_URL);
+            const csvText = await res.text();
 
-            if (channelError) throw channelError;
+            Papa.parse(csvText, {
+                header: true,
+                skipEmptyLines: true,
+                transformHeader: (header, index) => header ? header : `Unnamed: ${index}`,
+                complete: (results) => {
+                    const sheetRows = results.data as any[];
 
-            // 抓取 youtube_reporting 詳細資料
-            const { data: reportingData, error: reportingError } = await supabase
-                .from('youtube_reporting')
-                .select('*')
-                .gte('views', 0); // 基本過濾，確保有資料
+                    // 1. 以 Google Sheet 為主數據源輸出所有影片
+                    const realVideos: VideoData[] = [];
 
-            if (reportingError) {
-                console.warn('youtube_reporting fetch failed:', reportingError);
-                // 不要因為這個錯就中斷整個戰情室
-            } else {
-                setYoutubeReports(reportingData || []);
-            }
+                    sheetRows.forEach((row, index) => {
+                        const rawTitle = row['content_title'] || row['Title'] || `Untitled ${index}`;
+                        const rawChannel = row['title'] || row['頻道'] || 'Unknown Channel';
+                        const rawPlatform = row['platform'] || row['Platform'] || 'YOUTUBE';
+                        const url = String(row['url'] || row['URL'] || '').trim();
 
-            // 建立 Channel Dictionary
-            const channelMap = new Map();
-            if (channelData) {
-                setChannelDataList(channelData); // 供給頻道概況使用
+                        // 標準化
+                        const platformNorm = normalizeString(rawPlatform);
+                        const channelNorm = normalizeString(rawChannel);
 
-                channelData.forEach((c: any) => {
-                    const cid = c.channel_id;
-                    if (cid) channelMap.set(cid, c);
-                });
-            }
+                        let vId = '';
+                        if (url) {
+                            if (url.includes('youtube.com/shorts/')) vId = url.split('youtube.com/shorts/')[1].split('?')[0];
+                            else if (url.includes('watch?v=')) vId = url.split('watch?v=')[1].split('&')[0];
+                            else if (url.includes('youtu.be/')) vId = url.split('youtu.be/')[1].split('?')[0];
+                            else if (url.includes('instagram.com/')) vId = url.split('instagram.com/')[1].split('/')[1] || String(row['ID'] || '');
+                            else if (url.includes('threads.net/')) vId = url.split('threads.net/')[1].split('/')[1] || String(row['ID'] || '');
+                            else vId = String(row['ID'] || '');
+                        }
 
-            if (videoData && videoData.length > 0) {
-                // 將查詢到的 channels 資料結構映射到現有 UI 需要的格式
-                const processedData = videoData.map((item: any) => {
-                    const cid = item.channel_id || item.channelId;
-                    const matchedChannel = channelMap.get(cid) || { id: cid || 'unknown', name: `頻道 ${cid || '未知'}` };
+                        // 使 ID 絕對唯一 (平台_影片ID_行號)，防止 React Key 碰撞
+                        const uniqueId = `${platformNorm}_${vId || 'NOID'}_${index}`;
 
-                    const vid = item.content_id || item.video_id || item.url?.split('v=')[1] || item.id;
-                    const ytReport = (reportingData || []).find((r: any) => r.video_id === vid);
+                        // 配對 Supabase DB 數據
+                        const vTags = tagsData?.filter(t => t.video_id === vId).map(t => t.tags).flat() || ['無標籤'];
+                        const videoRetentions = retData?.filter(r => r.video_id === vId) || [];
 
-                    return calculateMetrics({
-                        ...item,
-                        channels: matchedChannel,
-                        youtubeMetrics: ytReport
+                        // 3. 重建真實留存率曲線 (解讀 retention_csv 每個百分比對應的秒數)
+                        let retentionCurve: any[] = [];
+                        if (videoRetentions.length > 0 && videoRetentions[0].retention_csv) {
+                            let totalSeconds = 0;
+                            try {
+                                const rawDur = videoRetentions[0].duration_raw || "0:00";
+                                const parts = rawDur.split(':');
+                                if (parts.length >= 2) totalSeconds = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+                                else totalSeconds = parseFloat(rawDur);
+                            } catch (e) { }
+
+                            const csvVals = videoRetentions[0].retention_csv.split(',').map(Number);
+                            const len = csvVals.length;
+                            if (len > 1 && totalSeconds > 0) {
+                                retentionCurve = csvVals.map((val: number, i: number) => {
+                                    const sec = (i / (len - 1)) * totalSeconds;
+                                    const min = Math.floor(sec / 60);
+                                    const remSec = (sec % 60).toFixed(1);
+                                    const fmtSec = remSec.length === 3 ? `0${remSec}` : remSec;
+                                    return {
+                                        time: parseFloat(sec.toFixed(1)),
+                                        formattedTime: `0${min}:${fmtSec}`,
+                                        retention: parseFloat((val * 100).toFixed(1))
+                                    };
+                                });
+                            }
+                        }
+
+                        // (Fallback: 若沒有留存曲線，則不產生假數據，設為空陣列)
+                        if (retentionCurve.length === 0) {
+                            retentionCurve = [];
+                        }
+
+                        // 3.5 計算該影片的分析有效時長 (從 Slides 或 Retention 資料獲取)
+                        const videoSlides = slidesData?.filter(s => s.video_id === vId) || [];
+                        const maxSlideTime = videoSlides.length > 0
+                            ? Math.max(...videoSlides.map(s => parseFloat(s.end_time)))
+                            : 0;
+
+                        const retentionMaxTime = retentionCurve.length > 0
+                            ? retentionCurve[retentionCurve.length - 1].time
+                            : 0;
+
+                        const maxDuration = Math.max(maxSlideTime, retentionMaxTime);
+
+                        // 4. 重大流失與高光事件配對
+                        let finalEvents: any[] = [];
+                        if (videoRetentions.length > 0) {
+                            for (const drop of videoRetentions) {
+                                if (!drop.drop_start) continue;
+                                let dropS = 0;
+                                try {
+                                    const parts = drop.drop_start.split(':');
+                                    if (parts.length >= 2) dropS = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+                                } catch (e) { }
+
+                                // Find Guilty Slide
+                                const guiltySlides = slidesData?.filter(s => {
+                                    if (s.video_id !== vId) return false;
+                                    try {
+                                        const stParts = s.start_time.split(':');
+                                        const edParts = s.end_time.split(':');
+                                        const sStart = parseInt(stParts[0]) * 60 + parseFloat(stParts[1]);
+                                        const sEnd = parseInt(edParts[0]) * 60 + parseFloat(edParts[1]);
+                                        return dropS >= sStart && dropS <= sEnd;
+                                    } catch (e) { return false; }
+                                }) || [];
+
+                                const targetSlide = guiltySlides.length > 0 ? guiltySlides[0] : null;
+                                const isPeak = drop.drop_type === 'Peak';
+
+                                finalEvents.push({
+                                    timeIndex: dropS, // numeric exact second match for line
+                                    timeLabel: drop.drop_start.replace('.0', ''), // string like "0:04.6"
+                                    severity: isPeak ? 'Positive' : 'Critical',
+                                    slideInsights: {
+                                        role: targetSlide?.role || '未配對到簡報角色',
+                                        visual: targetSlide?.visual_evidence || '無對應特徵畫面 (可能發生於動態轉場)',
+                                        trigger: targetSlide?.psychological_trigger || '無法解析觸發觀眾痛點的原因',
+                                        imageText: targetSlide?.image_text_content_ch || '—',
+                                        videoPrompt: targetSlide?.video_prompt_ch || '—',
+                                        strategy: targetSlide?.tag_alignment_content || '—',
+                                        aiSummary: isPeak
+                                            ? `高潮點歸因成功！發生了大約 +${Math.abs(drop.drop_severity || 0)}% 留存率修正，數據指出此處發生大量重播回看。`
+                                            : `系統偵測到觀眾在此發生 -${Math.abs(drop.drop_severity || 0)}% 的斷崖流失。右列為對齊秒數所剖析出的致命簡報特徵。`
+                                    }
+                                });
+                            }
+                        }
+
+                        // 防呆：有時候第一列會是中文的次要標頭，若符合則略過
+                        if (rawTitle === '內容標題' || rawChannel === '頻道名稱') return;
+
+                        const pubDate = String(row['date'] || row['Date'] || '2026/01/01');
+                        let ts = 0;
+                        try { ts = new Date(pubDate).getTime(); } catch (e) { }
+
+                        // 建立時間序列趨勢資料 (1d, 2d, 3d, 7d, 14d)
+                        const timelineData = [];
+                        const dayMap = [
+                            { label: '1D', v: '1d', l: 'Unnamed: 10', s: 'Unnamed: 11', c: 'Unnamed: 12' },
+                            { label: '2D', v: '2d', l: 'Unnamed: 14', s: 'Unnamed: 15', c: 'Unnamed: 16' },
+                            { label: '3D', v: '3d', l: 'Unnamed: 18', s: 'Unnamed: 19', c: 'Unnamed: 20' },
+                            { label: '7D', v: '7d', l: 'Unnamed: 22', s: 'Unnamed: 23', c: 'Unnamed: 24' },
+                            { label: '14D', v: '14d', l: 'Unnamed: 26', s: 'Unnamed: 27', c: 'Unnamed: 28' },
+                        ];
+                        for (const d of dayMap) {
+                            const views = parseInt(String(row[d.v]).replace(/,/g, '')) || 0;
+                            const likes = parseInt(String(row[d.l]).replace(/,/g, '')) || 0;
+                            const saves = parseInt(String(row[d.s]).replace(/,/g, '')) || 0;
+                            const comments = parseInt(String(row[d.c]).replace(/,/g, '')) || 0;
+                            // 略過完全空值的節點以免線圖斷裂，但若有值就塞入
+                            if (row[d.v]) {
+                                timelineData.push({ day: d.label, views, likes, saves, comments });
+                            }
+                        }
+
+                        realVideos.push({
+                            id: uniqueId,
+                            originalId: vId,
+                            sheetIndex: index,
+                            title: rawTitle,
+                            channel: channelNorm,
+                            platform: platformNorm,
+                            thumbnail: vId ? `https://img.youtube.com/vi/${vId}/maxresdefault.jpg` : 'https://placehold.co/600x400/1e293b/6366f1?text=No+Preview',
+                            publishedAt: pubDate,
+                            timestamp: ts,
+                            kpi: {
+                                views: row['觀看次數'] || row['views'] || 0,
+                                likes: row['按讚數'] || row['likes'] || 0,
+                                comments: row['留言數'] || row['comments'] || 0,
+                                watchTime: row['平均觀看時間'] || row['觀看時間'] || '0:00',
+                                er: row['留言%'] || row['ER(%)'] || 0,
+                                subs: row['獲得訂閱數'] || 0
+                            },
+                            tags: vTags,
+                            retentionData: retentionCurve,
+                            dropEvents: finalEvents,
+                            timelineData: timelineData,
+                            maxDuration: maxDuration,
+                            hasRetention: retentionCurve.length > 0,
+                            hasSlides: videoSlides.length > 0,
+                            depthMetrics: videoRetentions.length > 0 ? {
+                                averageRetention: videoRetentions[0].average_retention,
+                                averageWatchTime: videoRetentions[0].average_watch_time,
+                                endRetentionRate: videoRetentions[0].end_retention_rate,
+                                stayAbove90End: videoRetentions[0].stay_above_90_end,
+                                stayAbove70End: videoRetentions[0].stay_above_70_end,
+                                rewatchDropStart: videoRetentions[0].rewatch_drop_start,
+                                rewatchDropEnd: videoRetentions[0].rewatch_drop_end,
+                                rewatchDropSeverity: videoRetentions[0].rewatch_drop_severity,
+                                coreDropStart: videoRetentions[0].core_drop_start,
+                                coreDropEnd: videoRetentions[0].core_drop_end,
+                                coreDropSeverity: videoRetentions[0].core_drop_severity,
+                            } : undefined
+                        });
                     });
-                });
-                setData(processedData);
-            } else {
-                // Fallback for development if table is empty
-                console.warn('Table is empty or RLS prevented access. Using Mock Data for preview.');
-                setData(MOCK_DATA.map(calculateMetrics));
-            }
-        } catch (err: any) {
-            console.error('Error fetching data:', err);
-            // Fallback to demo data to keep the UI interactive during development
-            setData(MOCK_DATA.map(calculateMetrics));
-        } finally {
-            setIsLoading(false);
-        }
-    };
 
-    useEffect(() => {
-        fetchData();
-    }, []);
+                    // 新到舊排序 (Sort by Date Descending)
+                    realVideos.sort((a, b) => b.timestamp - a.timestamp);
 
-    // Extract unique channels with proper titles and platform filtering
-    const uniqueChannels = useMemo(() => {
-        const map = new Map<string, { id: string, name: string, platform: string }>();
-        channelDataList.forEach(c => {
-            const cid = c.channel_id;
-            if (!cid) return;
-            const ctitle = c.title || c.name || `頻道 ${cid}`;
-            const cplatform = c.platform?.toLowerCase() || 'youtube';
-            if (platformFilter === 'all' || platformFilter === cplatform) {
-                if (!map.has(cid)) {
-                    map.set(cid, { id: cid, name: ctitle, platform: cplatform });
+                    // Pick all parsed videos that exist in the DB (should be ~10)
+                    setVideos(realVideos);
+                    if (realVideos.length > 0 && !manual) setExpandedVideoId(realVideos[0].id);
+
+                    const now = new Date();
+                    setLastUpdated(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`);
+                    setIsLoading(false);
+                    setIsSyncing(false);
                 }
-            }
-        });
-        return Array.from(map.values());
-    }, [channelDataList, platformFilter]);
-
-    // App.tsx 中負責過濾與彙整的核心邏輯
-    const historicalFilteredData = useMemo(() => {
-        let result = [...data];
-
-        if (platformFilter !== 'all') {
-            result = result.filter(d => (d.platform?.toLowerCase() || 'youtube') === platformFilter);
-        }
-
-        if (selectedChannels.length > 0) {
-            result = result.filter(d =>
-                selectedChannels.includes(d.channels?.id || '') ||
-                selectedChannels.includes(d.channel_id || '')
-            );
-        }
-
-        return result;
-    }, [data, platformFilter, selectedChannels]);
-
-    // 取「最新一筆」作為儀表板的現況指標與排行
-    const latestFilteredData = useMemo(() => {
-        const map = new Map<string, PostData>();
-        historicalFilteredData.forEach(d => {
-            const uniqueId = d.content_id || d.video_id || d.url || d.title || d.id;
-            const existing = map.get(uniqueId);
-            const tDate = d.timestamp ? new Date(d.timestamp).getTime() : 0;
-            const existingDate = existing && existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
-
-            if (!existing || tDate > existingDate) {
-                map.set(uniqueId, d);
-            }
-        });
-
-        const result = Array.from(map.values());
-        result.sort((a, b) => {
-            const timeA = new Date(a.timestamp ? String(a.timestamp) : 0).getTime();
-            const timeB = new Date(b.timestamp ? String(b.timestamp) : 0).getTime();
-            return timeB - timeA;
-        });
-
-        return result;
-    }, [historicalFilteredData]);
-
-    const latestChannelStats = useMemo(() => {
-        const map = new Map<string, ChannelStat>();
-        channelDataList.forEach(c => {
-            const cid = c.channel_id;
-            if (!cid) return;
-
-            const existing = map.get(cid);
-            const tDateNum = new Date(c.timestamp || c.created_at || 0).getTime();
-            const existingDateNum = existing ? new Date(existing.timestamp || existing.created_at || 0).getTime() : 0;
-
-            if (!existing || tDateNum > existingDateNum) {
-                map.set(cid, c);
-            }
-        });
-
-        let result = Array.from(map.values());
-        if (platformFilter !== 'all') {
-            result = result.filter(c => (c.platform?.toLowerCase() || 'youtube') === platformFilter);
-        }
-        if (selectedChannels.length > 0) {
-            result = result.filter(c => selectedChannels.includes(c.channel_id || ''));
-        }
-        return result;
-    }, [channelDataList, platformFilter, selectedChannels]);
-
-    // Calculate Outliers (2 std deviations) for Viral Score globally
-    const viralScores = latestFilteredData.map(d => d.viralScore || 0);
-    const mean = viralScores.length > 0 ? viralScores.reduce((a, b) => a + b, 0) / viralScores.length : 0;
-    const variance = viralScores.length > 0 ? viralScores.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / viralScores.length : 0;
-    const stdDev = Math.sqrt(variance);
-    const viralThreshold = mean + (2 * stdDev);
-
-    const kpiData = {
-        totalViews: latestFilteredData.reduce((acc, curr) => acc + (curr.viewCount || 0), 0),
-        avgER: (latestFilteredData.reduce((acc, curr) => acc + (curr.er || 0), 0) / Math.max(latestFilteredData.length, 1)).toFixed(2),
-        totalPosts: latestFilteredData.length,
-        viralPosts: latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold).length,
-        totalWatchTime: latestFilteredData.reduce((acc, curr) => acc + (curr.youtubeMetrics?.watch_time_minutes || 0), 0),
-        totalNetSubs: latestFilteredData.reduce((acc, curr) => acc + ((curr.youtubeMetrics?.subscribers_gained || 0) - (curr.youtubeMetrics?.subscribers_lost || 0)), 0),
-    };
-
-    // Prepare LineChart Data (Historical Trend by Date & Entity)
-    const { chartData, chartLines } = useMemo(() => {
-        const dayMap = new Map<number, any>();
-        const linesSet = new Set<string>();
-
-        historicalFilteredData.forEach(d => {
-            if (!d.timestamp) return;
-            const dTime = new Date(d.timestamp);
-            if (isNaN(dTime.getTime())) return;
-
-            const dayStart = new Date(dTime.getFullYear(), dTime.getMonth(), dTime.getDate()).getTime();
-
-            if (!dayMap.has(dayStart)) {
-                dayMap.set(dayStart, { timestamp: dayStart });
-            }
-
-            const dayObj = dayMap.get(dayStart)!;
-
-            // 如果沒選定任何頻道，則以「頻道」為單位畫線；若有選定，則以「影片標題」為單位畫線
-            let lineKey = '未命名';
-            if (selectedChannels.length === 0) {
-                lineKey = d.channels?.name || d.channelTitle || `頻道 ${d.channel_id}`;
-            } else {
-                lineKey = d.title || '未命名影片';
-            }
-            if (lineKey.length > 20) lineKey = lineKey.substring(0, 20) + '...';
-
-            linesSet.add(lineKey);
-            // 累加該特徵主體的當日總觀看
-            dayObj[lineKey] = (dayObj[lineKey] || 0) + (d.viewCount || 0);
-        });
-
-        const sortedData = Array.from(dayMap.values())
-            .sort((a, b) => a.timestamp - b.timestamp)
-            .map(obj => {
-                const dateObj = new Date(obj.timestamp);
-                const dateStr = `${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
-                return { name: dateStr, ...obj };
             });
 
-        return { chartData: sortedData, chartLines: Array.from(linesSet) };
-    }, [historicalFilteredData, selectedChannels]);
+        } catch (err) {
+            console.error("Data Sync Error:", err);
+            setIsLoading(false);
+            setIsSyncing(false);
+        }
+    }
 
-    // Prepare PieChart Data for Platform Distribution
-    const platformDistribution = useMemo(() => {
-        const stats: Record<string, number> = {};
-        latestFilteredData.forEach(d => {
-            const plat = d.platform?.toLowerCase() || 'unknown';
-            if (plat !== 'unknown') {
-                stats[plat] = (stats[plat] || 0) + (d.viewCount || 0);
-            }
-        });
+    useEffect(() => {
+        syncData();
+    }, []);
 
-        return Object.entries(stats).map(([key, value]) => ({
-            name: key.charAt(0).toUpperCase() + key.slice(1),
-            value,
-            fill: platformColors[key] || '#9ca3af'
-        })).filter(item => item.value > 0);
-    }, [latestFilteredData]);
-
-    // Prepare Tags Analytics Data
-    const tagsStats = useMemo(() => {
-        const tagMap: Record<string, { count: number; views: number; totalEr: number }> = {};
-
-        latestFilteredData.forEach(post => {
-            if (Array.isArray(post.tags) && post.tags.length > 0) {
-                post.tags.forEach(tag => {
-                    if (!tag) return;
-                    const cleanTag = tag.trim().toLowerCase();
-                    if (!tagMap[cleanTag]) {
-                        tagMap[cleanTag] = { count: 0, views: 0, totalEr: 0 };
-                    }
-                    tagMap[cleanTag].count += 1;
-                    tagMap[cleanTag].views += (post.viewCount || 0);
-                    tagMap[cleanTag].totalEr += (post.er || 0);
-                });
-            }
-        });
-
-        return Object.entries(tagMap)
-            .map(([tag, stats]) => ({
-                tag,
-                count: stats.count,
-                views: stats.views,
-                avgEr: stats.count > 0 ? (stats.totalEr / stats.count).toFixed(2) : 0
-            }))
-            .sort((a, b) => b.views - a.views)
-            .slice(0, 50); // 只取前 50 大標籤
-    }, [latestFilteredData]);
-
-    const viralPosts = latestFilteredData.filter(d => stdDev > 0 && (d.viralScore || 0) > viralThreshold);
-
-    // AI Actionable Insights Generator (v2.0)
-    const renderActionableInsights = () => {
-        if (selectedChannels.length === 0) return null;
-        const selectedChannelReports = youtubeReports.filter(r => selectedChannels.includes(r.channel_id || ''));
-        if (selectedChannelReports.length === 0) return null;
-
-        // Rule 1: Retention Alert (Avg duration < 30 sec on videos with > 100 views)
-        const lowRetention = selectedChannelReports.some(r => r.views > 100 && r.average_view_duration_seconds < 30);
-
-        // Rule 2: Subscription Funnel (Views > 500 but gaining < 2 subscribers)
-        const lowConversion = selectedChannelReports.some(r => r.views > 500 && r.subscribers_gained < 2);
-
-        if (!lowRetention && !lowConversion) return null;
-
+    if (isLoading) {
         return (
-            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6 shadow-[0_4px_20px_-5px_rgba(251,191,36,0.2)] mb-6 transform transition-all duration-500 ease-out translate-y-0 opacity-100">
-                <h3 className="text-xl font-bold text-amber-800 flex items-center gap-2 mb-4">
-                    ✨ AI 運營優化建議清單 (Actionable Insights)
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {lowRetention && (
-                        <div className="bg-white/80 p-4 rounded-xl border border-amber-100 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
-                            <div className="bg-red-100 text-red-600 p-2.5 rounded-lg shrink-0">
-                                <AlertCircle className="w-6 h-6" />
-                            </div>
-                            <div>
-                                <h4 className="font-bold text-gray-900 text-base">⚠️ 鉤子失效警告 (Retention Drop)</h4>
-                                <p className="text-sm text-gray-600 mt-1.5 leading-relaxed">偵測到部分爆款影片平均觀看秒數過低，建議優先優化影片前 3 秒 Hook，或大刀闊斧剪去冗長開頭片段，避免被演算法降流。</p>
-                            </div>
-                        </div>
-                    )}
-                    {lowConversion && (
-                        <div className="bg-white/80 p-4 rounded-xl border border-amber-100 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
-                            <div className="bg-blue-100 text-blue-600 p-2.5 rounded-lg shrink-0">
-                                <MousePointerClick className="w-6 h-6" />
-                            </div>
-                            <div>
-                                <h4 className="font-bold text-gray-900 text-base">💡 高曝光缺乏轉換 (Sub Funnel)</h4>
-                                <p className="text-sm text-gray-600 mt-1.5 leading-relaxed">偵測到部分影片獲得大量曝光觀看卻未能轉化成有效粉絲。建議在這些破播影片的片尾、以及留言區置頂加入明確的 Call to Action (CTA) 訂閱呼籲。</p>
-                            </div>
-                        </div>
-                    )}
-                </div>
+            <div className="min-h-screen bg-[#0B0F19] flex flex-col items-center justify-center text-indigo-400">
+                <Loader2 className="w-12 h-12 animate-spin mb-4" />
+                <p className="font-bold tracking-widest text-lg">DATALINK ESTABLISHING...</p>
+                <p className="text-gray-500 text-sm mt-2">正在從 Supabase 與 Google Sheet 汲取並 JOIN 真實數據</p>
             </div>
-        );
-    };
+        )
+    }
+
+    if (videos.length === 0) {
+        return (
+            <div className="min-h-screen bg-[#0B0F19] flex flex-col items-center justify-center text-rose-400">
+                <AlertCircle className="w-12 h-12 mb-4" />
+                <p className="font-bold">找不到關聯資料</p>
+                <p className="text-gray-500 text-sm mt-2">無法配對 Google Sheet 發文資料庫與 Supabase 重大事件庫。請確認資料來源。</p>
+            </div>
+        )
+    }
 
     return (
-        <div className="flex h-screen bg-gray-50/50 font-sans overflow-hidden">
+        <div className="min-h-screen bg-[#0B0F19] text-gray-200 font-sans selection:bg-indigo-500/30 flex overflow-hidden">
 
-            {/* Sidebar Overlay (Mobile) */}
-            {!isSidebarOpen && (
-                <div
-                    className="fixed inset-0 bg-gray-900/50 z-40 lg:hidden"
-                    onClick={() => setIsSidebarOpen(true)}
-                ></div>
-            )}
-
-            {/* Main Sidebar */}
+            {/* A. 側邊導覽列 (Collapsed Sidebar) */}
             <aside
-                className={`${isSidebarOpen ? 'w-64' : 'w-20'} 
-                flex-shrink-0 bg-white border-r border-gray-200 transition-all duration-300 ease-in-out z-50 flex flex-col`}>
-
-                {/* Sidebar Header */}
-                <div className="h-16 flex items-center justify-between px-4 border-b border-gray-100">
-                    {isSidebarOpen ? (
-                        <div className="flex items-center gap-2 overflow-hidden">
-                            <Activity className="text-indigo-600 w-6 h-6 flex-shrink-0" />
-                            <span className="font-bold text-gray-900 whitespace-nowrap">War Room Controller</span>
-                        </div>
-                    ) : (
-                        <Activity className="text-indigo-600 w-6 h-6 mx-auto" />
-                    )}
+                className={`fixed inset-y-0 left-0 z-50 bg-[#0F172A] border-r border-gray-800 transition-all duration-300 ease-in-out lg:relative ${isSidebarOpen ? 'w-64' : 'w-20'
+                    }`}
+            >
+                <div className="h-16 flex items-center justify-between px-6 border-b border-gray-800">
                     {isSidebarOpen && (
-                        <button onClick={() => setIsSidebarOpen(false)} className="text-gray-400 hover:text-gray-600 lg:hidden">
-                            <X className="w-5 h-5" />
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded bg-indigo-500 flex items-center justify-center">
+                                <Activity className="w-3.5 h-3.5 text-white" />
+                            </div>
+                            <span className="text-sm font-bold tracking-tight text-white">WAR ROOM</span>
+                        </div>
                     )}
+                    {!isSidebarOpen && (
+                        <div className="w-full flex justify-center">
+                            <div className="w-8 h-8 rounded bg-indigo-500 flex items-center justify-center">
+                                <Activity className="w-4 h-4 text-white" />
+                            </div>
+                        </div>
+                    )}
+                    <button
+                        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                        className="p-2 rounded-lg hover:bg-white/5 text-gray-400 transition-colors"
+                    >
+                        {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+                    </button>
                 </div>
 
-                {/* Navigation Links */}
-                <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-                    <button
-                        onClick={() => setCurrentView('dashboard')}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'dashboard' ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                        <LayoutDashboard className="w-5 h-5 flex-shrink-0" />
-                        {isSidebarOpen && <span>網紅趨勢面板</span>}
-                    </button>
+                <div className="py-6 px-3 space-y-2">
+                    <div
+                        className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-[0_0_15px_-4px_rgba(99,102,241,0.3)]`}
+                    >
+                        <LayoutGrid className="w-5 h-5 shrink-0" />
+                        {isSidebarOpen && (
+                            <div className="flex flex-col min-w-0">
+                                <span className="text-sm font-bold truncate">內容歸因引擎</span>
+                                <span className="text-[9px] uppercase tracking-tighter opacity-50 font-mono">AUTOMATED ATTRIBUTION</span>
+                            </div>
+                        )}
+                    </div>
 
-                    <button
-                        onClick={() => setCurrentView('insights')}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'insights' ? 'bg-amber-50 text-amber-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                        <Activity className="w-5 h-5 flex-shrink-0" />
-                        {isSidebarOpen && <span>智能運營優化</span>}
-                    </button>
+                    <div className="pt-4 px-3 mb-2">
+                        {isSidebarOpen ? (
+                            <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest leading-none">Modules</span>
+                        ) : (
+                            <div className="h-px bg-gray-800 w-full" />
+                        )}
+                    </div>
 
-                    <button
-                        onClick={() => setCurrentView('channel')}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'channel' ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                        <LineChart className="w-5 h-5 flex-shrink-0" />
-                        {isSidebarOpen && <span>頻道整體概況</span>}
-                    </button>
+                    <div className="group flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-500 hover:bg-white/5 hover:text-gray-300 transition-all cursor-not-allowed grayscale">
+                        <Database className="w-5 h-5 shrink-0" />
+                        {isSidebarOpen && <span className="text-sm font-medium">資料庫管理</span>}
+                    </div>
 
-                    <button
-                        onClick={() => setCurrentView('wall-of-fame')}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'wall-of-fame' ? 'bg-orange-50 text-orange-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                        <Flame className="w-5 h-5 flex-shrink-0" />
-                        {isSidebarOpen && <span>超級爆款金榜</span>}
-                    </button>
-
-                    <button
-                        onClick={() => setCurrentView('tags')}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'tags' ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                        <Hash className="w-5 h-5 flex-shrink-0" />
-                        {isSidebarOpen && <span>熱門標籤分析</span>}
-                    </button>
-
-                    <button
-                        onClick={() => {
-                            setCurrentView('channel-analytics');
-                            setPlatformFilter('youtube'); // 自動切換為 YT
-                            // 預設選取第一個頻道作為 Tab
-                            if (uniqueChannels.length > 0 && !selectedChannelTab) {
-                                setSelectedChannelTab(uniqueChannels[0].id);
-                            }
-                        }}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${currentView === 'channel-analytics' ? 'bg-red-50 text-red-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                        <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-                        </svg>
-                        {isSidebarOpen && <span>頻道與影片全分析</span>}
-                    </button>
-                </nav>
-
-                {/* Sidebar Footer */}
-                <div className="p-4 border-t border-gray-100">
-                    <div className={`flex items-center gap-2 ${!isSidebarOpen && 'justify-center'}`}>
-                        <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]"></div>
-                        {isSidebarOpen && <span className="text-xs text-gray-500 font-medium">Supabase Connected</span>}
+                    <div className="group flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-500 hover:bg-white/5 hover:text-gray-300 transition-all cursor-not-allowed grayscale">
+                        <BarChart2 className="w-5 h-5 shrink-0" />
+                        {isSidebarOpen && <span className="text-sm font-medium">深度洞察匯報</span>}
                     </div>
                 </div>
+
+                {isSidebarOpen && (
+                    <div className="absolute bottom-6 left-6 right-6">
+                        <div className="bg-[#151E32] rounded-2xl p-4 border border-indigo-500/20">
+                            <p className="text-[10px] font-bold text-indigo-400 uppercase mb-2">System Status</p>
+                            <div className="flex items-center gap-2">
+                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                <span className="text-[11px] text-gray-400 font-medium">DB Stream Connected</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </aside>
 
-            {/* Main Content Area */}
-            <div className="flex-1 flex flex-col h-screen overflow-hidden">
+            {/* B. 主內容區域 (Main Content View) */}
+            <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+                <nav className="border-b border-gray-800 bg-[#0F172A]/80 backdrop-blur-md sticky top-0 z-40">
+                    <div className="max-w-full px-8 h-16 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <h1 className="text-lg font-bold tracking-tight text-white">
+                                Content<span className="text-emerald-400 font-light">Attribution</span>
+                            </h1>
+                            <div className="h-4 w-px bg-gray-800 hidden sm:block" />
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] uppercase font-bold tracking-widest hidden sm:inline-block">
+                                Live API Connected
+                            </span>
+                        </div>
 
-                {/* Topbar for filtering */}
-                <header className="bg-white border-b border-gray-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 z-10 shadow-sm relative">
-                    <div className="flex items-center gap-4 w-full sm:w-auto">
-                        <button onClick={() => setIsSidebarOpen(true)} className="text-gray-500 hover:text-indigo-600 transition-colors lg:hidden">
-                            <Menu className="w-6 h-6" />
-                        </button>
-                        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 leading-tight hidden lg:block">
-                            Omnichannel War Room
-                        </h1>
-                    </div>
-
-                    <div className="flex gap-3 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
-                        <select
-                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 hover:border-indigo-300 p-2.5 outline-none font-medium min-w-[140px] transition-colors shadow-sm"
-                            value={platformFilter}
-                            onChange={(e) => {
-                                setPlatformFilter(e.target.value);
-                                setSelectedChannels([]); // 換平台時重設頻道多選狀態
-                            }}
-                        >
-                            <option value="all">所有平台 (綜效)</option>
-                            <option value="youtube">YouTube</option>
-                            <option value="instagram">Instagram</option>
-                            <option value="threads">Threads</option>
-                        </select>
-
-                        {/* Custom Multiselect Channel Dropdown */}
-                        <div className="relative min-w-[200px]" onMouseLeave={() => setIsChannelDropdownOpen(false)}>
+                        <div className="flex items-center gap-6">
+                            {lastUpdated && (
+                                <div className="hidden md:flex flex-col items-end">
+                                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-0.5">Last Updated</span>
+                                    <span className="text-xs font-mono text-gray-300 font-bold">{lastUpdated}</span>
+                                </div>
+                            )}
                             <button
-                                onClick={() => setIsChannelDropdownOpen(!isChannelDropdownOpen)}
-                                className="bg-white border border-gray-200 text-gray-700 text-sm rounded-lg hover:border-indigo-300 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 p-2.5 outline-none font-medium w-full flex items-center justify-between transition-colors shadow-sm min-h-[42px]"
+                                onClick={() => syncData(true)}
+                                disabled={isSyncing}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 hover:bg-indigo-500 hover:text-white transition-all group ${isSyncing ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                                <span className="truncate pr-2 select-none">
-                                    {selectedChannels.length === 0 ? "所有頻道 (未篩選)" : `已選擇 ${selectedChannels.length} 個頻道`}
-                                </span>
-                                <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isChannelDropdownOpen ? 'rotate-180' : ''}`} />
+                                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+                                <span className="text-sm font-bold">同步資料庫</span>
                             </button>
-
-                            {isChannelDropdownOpen && (
-                                <div className="absolute z-50 top-full mt-1.5 left-0 sm:right-auto right-0 sm:w-[260px] w-full min-w-[220px] bg-white border border-gray-200 rounded-xl shadow-xl max-h-[320px] flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                    <div className="bg-gray-50/80 p-2 border-b border-gray-100 flex gap-2 justify-between shrink-0">
-                                        <button onClick={() => setSelectedChannels(uniqueChannels.map(c => c.id))} className="text-xs text-indigo-600 hover:bg-indigo-50 px-2.5 py-1.5 rounded-md font-medium transition-colors border border-transparent hover:border-indigo-100 flex-1">
-                                            全選
-                                        </button>
-                                        <button onClick={() => setSelectedChannels([])} className="text-xs text-gray-500 hover:bg-gray-200/50 px-2.5 py-1.5 rounded-md font-medium transition-colors flex-1">
-                                            清除
-                                        </button>
-                                    </div>
-                                    <div className="overflow-y-auto flex-1 p-1 custom-scrollbar">
-                                        {uniqueChannels.length === 0 ? (
-                                            <div className="p-4 text-center text-sm text-gray-400">目前平台下無頻道資料</div>
-                                        ) : uniqueChannels.map(c => {
-                                            const isChecked = selectedChannels.includes(c.id);
-                                            return (
-                                                <label key={c.id} className={`flex items-center px-3 py-2.5 cursor-pointer rounded-lg mb-0.5 last:mb-0 transition-colors ${isChecked ? 'bg-indigo-50/60' : 'hover:bg-gray-50'}`}>
-                                                    <input
-                                                        type="checkbox"
-                                                        className="hidden"
-                                                        checked={isChecked}
-                                                        onChange={(e) => {
-                                                            if (e.target.checked) {
-                                                                setSelectedChannels(prev => [...prev, c.id]);
-                                                            } else {
-                                                                setSelectedChannels(prev => prev.filter(id => id !== c.id));
-                                                            }
-                                                        }}
-                                                    />
-                                                    <div className={`mr-3 flex items-center justify-center w-4 h-4 rounded border transition-colors shrink-0 ${isChecked ? 'bg-indigo-500 border-indigo-500 shadow-sm' : 'border-gray-300 bg-white'}`}>
-                                                        {isChecked && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
-                                                    </div>
-                                                    <span className={`text-sm truncate select-none ${isChecked ? 'font-semibold text-indigo-900' : 'text-gray-600'}`} title={c.name}>
-                                                        {c.name}
-                                                    </span>
-                                                </label>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            )}
                         </div>
-
-                        <button
-                            onClick={fetchData}
-                            disabled={isLoading}
-                            className="p-2.5 text-gray-500 hover:text-indigo-600 bg-gray-50 hover:bg-indigo-50 rounded-lg transition-colors border border-gray-200 hover:border-indigo-200 disabled:opacity-50 shrink-0"
-                            title="Refresh Data"
-                        >
-                            <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin cursor-wait' : ''}`} />
-                        </button>
                     </div>
-                </header>
+                </nav>
 
-                {/* Scrollable Content View */}
-                <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+                <main className="flex-grow p-8 lg:p-12 space-y-12 w-full">
 
-                    {/* Render Content Based on currentView */}
-                    {currentView === 'insights' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            <div className="flex items-center gap-3 mb-6">
-                                <Activity className="text-amber-500 w-8 h-8" />
+                    {/* 頁首標題區 */}
+                    <header className="flex flex-col gap-2">
+                        <h2 className="text-3xl lg:text-4xl font-extrabold text-white tracking-tight">
+                            全自動內容歸因引擎 <span className="text-gray-500 font-light text-2xl">| 真實數據同步版</span>
+                        </h2>
+                        <p className="text-gray-400 max-w-2xl leading-relaxed mt-2 text-sm sm:text-base">
+                            目前已連線您的 Google Sheet 與 Supabase 資料庫。此引擎透過分析 <strong>{videos.length} 取樣的「擁有受眾流失標記的影片」</strong> ，進行 Slide 與留存率聯集，實現數據驅動 (Data-Driven) 的簡報畫面改善歸因。
+                        </p>
+                    </header>
+
+                    {/* 多維度篩選器 (Filter Bar) */}
+                    <div className="bg-[#0F172A] border border-gray-800 rounded-2xl shadow-xl overflow-hidden mb-8">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-[#0F172A]">
+                            <div className="flex items-center gap-3">
+                                <Filter className="w-5 h-5 text-indigo-400" />
+                                <h3 className="font-bold text-white tracking-wide">資料庫多維度篩選</h3>
+                            </div>
+                            <button
+                                onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)}
+                                className="p-2 hover:bg-white/5 rounded-lg text-gray-400 transition-colors"
+                            >
+                                {isFilterPanelOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                            </button>
+                        </div>
+
+                        <div className={`transition-all duration-300 ease-in-out ${isFilterPanelOpen ? 'max-h-[1000px] opacity-100 p-6' : 'max-h-0 opacity-0 p-0 overflow-hidden'}`}>
+                            <div className="space-y-6">
+
+                                {/* Platform Filters */}
                                 <div>
-                                    <h2 className="text-2xl font-bold text-gray-900">智能運營優化中心</h2>
-                                    <p className="text-sm text-gray-500">基於頻道 YouTube Studio 的日誌數據，為您產出具體可行的下一步決策。</p>
-                                </div>
-                            </div>
-
-                            {selectedChannels.length === 0 ? (
-                                <div className="bg-amber-50 rounded-2xl p-10 text-center border border-amber-100 shadow-sm">
-                                    <Activity className="w-16 h-16 text-amber-300 mx-auto mb-4" />
-                                    <h3 className="text-xl font-bold text-amber-800">請先於上方選擇目標頻道</h3>
-                                    <p className="text-base text-amber-700 mt-2">智能優化系統專注於解析頻道的生長軌跡，<br />請在螢幕右上方選擇您想深度優化的目標頻道來啟動 AI 運算。</p>
-                                </div>
-                            ) : (
-                                renderActionableInsights() || (
-                                    <div className="bg-green-50 rounded-2xl p-10 text-center border border-green-100 shadow-sm">
-                                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                            <svg className="w-8 h-8 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                            </svg>
-                                        </div>
-                                        <h3 className="text-xl font-bold text-green-800">頻道指標健康</h3>
-                                        <p className="text-base text-green-700 mt-2">目前沒有偵測到需要緊急優化的項目，內容轉換漏斗與留存率皆在合理範圍內。請繼續保持！</p>
-                                    </div>
-                                )
-                            )}
-                        </div>
-                    )}
-
-                    {currentView === 'dashboard' && (
-                        <div className="max-w-7xl mx-auto space-y-8">
-
-                            <div className="flex items-center gap-3 mb-4">
-                                <LayoutDashboard className="text-indigo-600 w-8 h-8" />
-                                <div>
-                                    <h2 className="text-2xl font-bold text-gray-900">總覽與趨勢面板</h2>
-                                    <p className="text-sm text-gray-500">以宏觀視角檢視各大平台的大數據表現與互動指標</p>
-                                </div>
-                            </div>
-
-                            {/* KPI Cards */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                    <div>
-                                        <p className="text-sm font-medium text-gray-500 mb-1">總觀看數</p>
-                                        {isLoading ? <div className="h-9 w-24 bg-gray-200 rounded animate-pulse"></div> : (
-                                            <div className="flex items-baseline gap-2">
-                                                <p className="text-3xl font-bold text-gray-900">{kpiData.totalViews.toLocaleString()}</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="p-3 bg-blue-50 text-blue-500 rounded-xl">
-                                        <Eye className="w-6 h-6" />
-                                    </div>
-                                </div>
-
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                    <div>
-                                        <p className="text-sm font-medium text-gray-500 mb-1">平均互動率 (ER)</p>
-                                        {isLoading ? <div className="h-9 w-20 bg-gray-200 rounded animate-pulse"></div> : (
-                                            <p className="text-3xl font-bold text-gray-900">{kpiData.avgER}%</p>
-                                        )}
-                                    </div>
-                                    <div className="p-3 bg-green-50 text-green-500 rounded-xl">
-                                        <MousePointerClick className="w-6 h-6" />
-                                    </div>
-                                </div>
-
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                    <div>
-                                        <p className="text-sm font-medium text-gray-500 mb-1">分析內容數</p>
-                                        {isLoading ? <div className="h-9 w-12 bg-gray-200 rounded animate-pulse"></div> : (
-                                            <p className="text-3xl font-bold text-gray-900">{kpiData.totalPosts}</p>
-                                        )}
-                                    </div>
-                                    <div className="p-3 bg-purple-50 text-purple-500 rounded-xl">
-                                        <Layers className="w-6 h-6" />
-                                    </div>
-                                </div>
-
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                    <div>
-                                        <p className="text-sm font-medium text-gray-500 mb-1">爆款標的</p>
-                                        {isLoading ? <div className="h-9 w-12 bg-gray-200 rounded animate-pulse"></div> : (
-                                            <p className="text-3xl font-bold text-orange-600">{kpiData.viralPosts}</p>
-                                        )}
-                                    </div>
-                                    <div className="p-3 bg-orange-50 text-orange-500 rounded-xl shadow-[0_0_15px_rgba(249,115,22,0.2)]">
-                                        <Flame className="w-6 h-6" />
-                                    </div>
-                                </div>
-
-                                {platformFilter === 'youtube' && (
-                                    <>
-                                        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 p-6 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                            <div>
-                                                <p className="text-sm font-medium text-indigo-800 mb-1">總觀看時長 (分)</p>
-                                                {isLoading ? <div className="h-9 w-20 bg-indigo-200/50 rounded animate-pulse"></div> : (
-                                                    <p className="text-3xl font-bold text-indigo-900">{kpiData.totalWatchTime.toLocaleString()}</p>
-                                                )}
-                                            </div>
-                                            <div className="p-3 bg-white text-indigo-600 rounded-xl shadow-sm">
-                                                <Activity className="w-6 h-6" />
-                                            </div>
-                                        </div>
-
-                                        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-6 rounded-2xl shadow-sm border border-emerald-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                            <div>
-                                                <p className="text-sm font-medium text-emerald-800 mb-1">淨訂閱成長</p>
-                                                {isLoading ? <div className="h-9 w-16 bg-emerald-200/50 rounded animate-pulse"></div> : (
-                                                    <p className="text-3xl font-bold text-emerald-900">+{kpiData.totalNetSubs.toLocaleString()}</p>
-                                                )}
-                                            </div>
-                                            <div className="p-3 bg-white text-emerald-600 rounded-xl shadow-sm">
-                                                <TrendingUp className="w-6 h-6" />
-                                            </div>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {currentView === 'wall-of-fame' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            <div className="flex items-center gap-3 mb-6">
-                                <Flame className="text-orange-500 w-8 h-8" />
-                                <div>
-                                    <h2 className="text-2xl font-bold text-gray-900">超級爆款金榜</h2>
-                                    <p className="text-sm text-gray-500">檢視系統從海量貼文中篩選出，互動爆發值超越均值兩倍標準差 (2 Std Dev) 的超限離群高成長內容。</p>
-                                </div>
-                            </div>
-
-                            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
-                                <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 content-start">
-                                    {isLoading ? (
-                                        <>
-                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
-                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
-                                            <div className="h-32 bg-gray-100 rounded-xl animate-pulse"></div>
-                                        </>
-                                    ) : viralPosts.length > 0 ? (
-                                        viralPosts.map(post => (
-                                            <div key={post.id} className="relative overflow-hidden rounded-xl border border-orange-100/50 bg-gradient-to-br from-white to-orange-50/30 p-5 shadow-[0_4px_20px_-5px_rgba(249,115,22,0.15)] group hover:shadow-[0_6px_30px_-5px_rgba(249,115,22,0.3)] transition-all ease-out duration-300 hover:-translate-y-1 block">
-                                                <div className="absolute top-0 right-0 w-32 h-32 bg-orange-400/10 rounded-full blur-3xl -mr-12 -mt-12"></div>
-                                                <div className="flex items-start justify-between relative z-10">
-                                                    <div>
-                                                        <p className="text-[11px] font-bold text-gray-500 mb-1.5 uppercase letter-spacing-wider">{post.channels?.name || post.channelTitle || 'Unknown Channel'}</p>
-                                                        <h3 className="text-base font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h3>
-                                                    </div>
-                                                    <span className={`px-2.5 py-1 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[post.platform?.toLowerCase()] || 'bg-gray-500'} shadow-sm ml-2 shrink-0`}>
-                                                        {post.platform}
-                                                    </span>
-                                                </div>
-
-                                                {/* Tags Rendering in Wall of fame */}
-                                                {post.tags && post.tags.length > 0 && (
-                                                    <div className="mt-3 flex flex-wrap gap-1.5 relative z-10">
-                                                        {post.tags.slice(0, 4).map((tag: string, idx: number) => (
-                                                            <span key={idx} className="text-[11px] font-medium bg-white/80 text-orange-600 px-2 py-0.5 rounded-md border border-orange-100">#{tag.trim()}</span>
-                                                        ))}
-                                                        {post.tags.length > 4 && <span className="text-[11px] text-gray-400 font-medium self-center pl-1">+{post.tags.length - 4}</span>}
-                                                    </div>
-                                                )}
-
-                                                <div className="mt-5 flex items-end justify-between text-sm relative z-10">
-                                                    <div>
-                                                        <p className="text-[10px] text-gray-400 font-medium mb-0.5">總觀看</p>
-                                                        <div className="font-extrabold text-gray-800 text-lg leading-none">{(post.viewCount || 0).toLocaleString()}</div>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[10px] text-orange-400/80 font-medium mb-0.5 text-right">爆發值</p>
-                                                        <div className="flex items-center gap-1.5 font-bold text-orange-600 bg-white border border-orange-100 px-2.5 py-1.5 rounded-lg shadow-sm">
-                                                            <Flame className="w-4 h-4" />
-                                                            {post.viralScore?.toLocaleString()} <span className="text-[10px] font-medium text-orange-400">/hr</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <div className="col-span-full h-40 flex flex-col items-center justify-center text-gray-400 py-6">
-                                            <div className="w-14 h-14 rounded-full bg-gray-50 border-2 border-dashed border-gray-200 flex items-center justify-center mb-4">
-                                                <Flame className="w-6 h-6 text-gray-300" />
-                                            </div>
-                                            <p className="text-base font-medium">指定條件下尚未偵測到超越雙倍標準差的爆款</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {currentView === 'dashboard' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            {/* Dashboard Charts: Pie & Trend */}
-                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-2">
-                                {/* Platform Distribution Pie Chart */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-1 flex flex-col">
-                                    <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
-                                        平台流量佔比
-                                    </h2>
-                                    {isLoading ? (
-                                        <div className="h-[300px] flex items-center justify-center">
-                                            <div className="w-20 h-20 border-4 border-gray-100 border-t-indigo-500 rounded-full animate-spin"></div>
-                                        </div>
-                                    ) : platformDistribution.length > 0 ? (
-                                        <div className="h-[300px] w-full relative">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <PieChart>
-                                                    <Pie
-                                                        data={platformDistribution}
-                                                        innerRadius={60}
-                                                        outerRadius={90}
-                                                        paddingAngle={5}
-                                                        dataKey="value"
-                                                    >
-                                                        {platformDistribution.map((entry, index) => (
-                                                            <Cell key={`cell-${index}`} fill={entry.fill} />
-                                                        ))}
-                                                    </Pie>
-                                                    <RechartsTooltip
-                                                        formatter={(value: number) => value.toLocaleString()}
-                                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                    />
-                                                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                                                </PieChart>
-                                            </ResponsiveContainer>
-                                        </div>
-                                    ) : (
-                                        <div className="h-[300px] flex items-center justify-center text-gray-400">目前無數據</div>
-                                    )}
-                                </div>
-
-                                {/* Main Trend Chart */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-2 flex flex-col">
-                                    <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
-                                        <TrendingUp className="w-5 h-5 text-indigo-500" />
-                                        動態趨勢折線圖
-                                    </h2>
-                                    {isLoading ? (
-                                        <div className="h-[300px] w-full bg-gray-50 rounded-lg animate-pulse"></div>
-                                    ) : (
-                                        <div className="h-[300px] w-full">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <RechartsLineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} dy={10} />
-                                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} tickFormatter={(val) => typeof val === 'number' && val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val} />
-                                                    <RechartsTooltip cursor={{ stroke: '#e5e7eb', strokeWidth: 2 }} contentStyle={{ borderRadius: '12px', border: '1px solid #f3f4f6', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                                                    <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
-                                                    {chartLines.map((lineKey, idx) => {
-                                                        const color = CHART_COLORS[idx % CHART_COLORS.length];
-                                                        return (
-                                                            <Line key={lineKey} type="monotone" dataKey={lineKey} name={lineKey} stroke={color} strokeWidth={3} dot={{ r: 4, fill: color, strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                                                        );
-                                                    })}
-                                                </RechartsLineChart>
-                                            </ResponsiveContainer>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Detailed Table */}
-                            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                                <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                                    <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                                        <List className="w-5 h-5 text-gray-400" />
-                                        數據明細列表
-                                    </h2>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left text-gray-500">
-                                        <thead className="text-xs text-gray-400 uppercase bg-gray-50/50">
-                                            <tr>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">頻道與內容</th>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">發布時間</th>
-                                                <th className="px-6 py-4 font-semibold">觀看 / 互動</th>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">深度成效 (YT)</th>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">健康度 (ER)</th>
-                                                <th className="px-6 py-4 font-semibold text-right">爆發指標</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {isLoading ? (
-                                                [...Array(3)].map((_, i) => (
-                                                    <tr key={i} className="border-b border-gray-50"><td colSpan={5} className="px-6 py-4"><div className="h-10 bg-gray-100 rounded animate-pulse"></div></td></tr>
-                                                ))
-                                            ) : latestFilteredData.length > 0 ? (
-                                                latestFilteredData.map((item) => {
-                                                    const isViral = stdDev > 0 && (item.viralScore || 0) > viralThreshold;
-                                                    return (
-                                                        <tr key={item.id} className="bg-white border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                                                            <td className="px-6 py-4">
-                                                                <div className="flex flex-col gap-1 w-max">
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[item.platform?.toLowerCase()] || 'bg-gray-500'} shrink-0`}>
-                                                                            {item.platform}
-                                                                        </span>
-                                                                        <span className="text-xs font-semibold text-gray-400">{item.channels?.name || item.channelTitle || item.channel_id}</span>
-                                                                    </div>
-                                                                    <a href={item.url || '#'} target="_blank" rel="noreferrer" className="group flex items-center justify-between gap-4 max-w-[350px]">
-                                                                        <span className="font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors" title={item.title}>
-                                                                            {item.title}
-                                                                        </span>
-                                                                        {item.url && <ExternalLink className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 flex-shrink-0" />}
-                                                                    </a>
-                                                                    {item.tags && item.tags.length > 0 && (
-                                                                        <div className="flex flex-wrap gap-1 mt-1 max-w-[350px]">
-                                                                            {item.tags.slice(0, 4).map((tag: string, idx: number) => (
-                                                                                <span key={idx} className="text-[10px] bg-gray-100 text-gray-500 px-1 py-0.5 rounded">#{tag.trim()}</span>
-                                                                            ))}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-6 py-4 whitespace-nowrap text-gray-400">
-                                                                {new Date(item.timestamp || '').toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                                                                <div className="text-[10px] text-gray-400 mt-1">{item.hoursSincePublished?.toFixed(0)} 小時前</div>
-                                                            </td>
-                                                            <td className="px-6 py-4">
-                                                                <div className="font-semibold text-gray-900">{(item.viewCount || 0).toLocaleString()}</div>
-                                                                <div className="text-xs text-gray-400 mt-1 flex gap-2">
-                                                                    <span title="Likes">👍 {item.likeCount || 0}</span>
-                                                                    <span title="Comments">💬 {item.commentCount || 0}</span>
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                                {item.youtubeMetrics ? (
-                                                                    <div className="flex flex-col gap-1.5 text-xs text-gray-500 font-medium">
-                                                                        <div className="flex items-center gap-1.5" title="總觀看時長(分鐘)">⏱️ {item.youtubeMetrics.watch_time_minutes?.toLocaleString() || 0} 分鐘</div>
-                                                                        <div className="flex items-center gap-1.5" title="平均觀看時長(秒)">👁️ {item.youtubeMetrics.average_view_duration_seconds?.toLocaleString() || 0} 秒</div>
-                                                                        <div className="flex items-center gap-1.5" title="淨訂閱成長">📈 <span className="text-green-600">+{(item.youtubeMetrics.subscribers_gained || 0) - (item.youtubeMetrics.subscribers_lost || 0)}</span></div>
-                                                                    </div>
-                                                                ) : (
-                                                                    <span className="text-gray-300 italic text-[10px] bg-gray-50 px-2 py-0.5 rounded border border-gray-100">無深度數據</span>
-                                                                )}
-                                                            </td>
-                                                            <td className="px-6 py-4">
-                                                                <span className={`inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-full ${(item.er || 0) > 10 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                                                                    {item.er}%
-                                                                </span>
-                                                            </td>
-                                                            <td className="px-6 py-4 text-right">
-                                                                <div className="flex items-center justify-end gap-2" title={isViral ? "超級爆款" : undefined}>
-                                                                    {isViral && <Flame className="w-4 h-4 text-orange-500 animate-pulse" />}
-                                                                    <span className={`font-bold ${isViral ? 'text-orange-600 text-base' : 'text-gray-900'}`}>{item.viralScore?.toLocaleString()}</span>
-                                                                    <span className="text-xs text-gray-400">/hr</span>
-                                                                </div>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })
-                                            ) : (
-                                                <tr>
-                                                    <td colSpan={5} className="px-6 py-12 text-center text-gray-400">目前選擇的條件下無資料</td>
-                                                </tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-
-                        </div>
-                    )}
-
-
-
-                    {/* Render Channel Overview */}
-                    {currentView === 'channel' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            <header className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100 gap-4">
-                                <div className="flex items-center gap-3">
-                                    <LineChart className="text-indigo-600 w-8 h-8" />
-                                    <div>
-                                        <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 leading-tight">
-                                            頻道整體概況
-                                        </h1>
-                                        <p className="text-xs text-gray-400 font-medium">追蹤您的所有社群帳號成長軌跡</p>
-                                    </div>
-                                </div>
-                            </header>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {isLoading ? (
-                                    [...Array(3)].map((_, i) => (
-                                        <div key={i} className="bg-white p-6 rounded-2xl border border-gray-100 h-40 animate-pulse"></div>
-                                    ))
-                                ) : latestChannelStats.length > 0 ? (
-                                    latestChannelStats.map(ch => (
-                                        <div key={ch.id || ch.channel_id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow group relative overflow-hidden">
-                                            {/* 背景裝飾 */}
-                                            <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-3xl -mr-10 -mt-10 opacity-20 ${platformBgColors[ch.platform?.toLowerCase() || 'youtube'] || 'bg-gray-300'}`}></div>
-
-                                            <div className="flex justify-between items-start mb-4 relative z-10">
-                                                <div>
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <h3 className="font-bold text-gray-900 text-lg">{ch.title || ch.name || '未命名頻道'}</h3>
-                                                        {ch.title && channelTypeMap[ch.title.split(' ')[0]] && (
-                                                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded shadow-sm ${channelTypeMap[ch.title.split(' ')[0]].color} ${channelTypeMap[ch.title.split(' ')[0]].bg}`}>
-                                                                {channelTypeMap[ch.title.split(' ')[0]].label}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`px-2 py-0.5 text-[10px] font-bold text-white rounded uppercase tracking-wider ${platformBgColors[ch.platform?.toLowerCase() || 'youtube'] || 'bg-gray-500'} shadow-sm`}>
-                                                            {ch.platform || 'youtube'}
-                                                        </span>
-                                                        {(ch.custom_url || ch.ownerUsername) && (
-                                                            <span className="text-xs text-gray-400 font-medium">{ch.custom_url || `@${ch.ownerUsername}`}</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                {ch.url && (
-                                                    <a href={ch.url} target="_blank" rel="noreferrer" className="p-2 bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="前往頻道">
-                                                        <ExternalLink className="w-4 h-4" />
-                                                    </a>
-                                                )}
-                                            </div>
-
-                                            <div className="grid grid-cols-2 gap-4 mt-6 relative z-10">
-                                                <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100/50">
-                                                    <p className="text-xs text-gray-500 font-medium mb-1">總訂閱 / 粉絲</p>
-                                                    <p className="font-bold text-gray-900 text-lg">{(ch.subscribers || ch.followsCount || 0).toLocaleString()}</p>
-                                                </div>
-                                                <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100/50">
-                                                    <p className="text-xs text-gray-500 font-medium mb-1">累積觀看次數</p>
-                                                    <p className="font-bold text-gray-900 text-lg">{(ch.total_views || 0).toLocaleString()}</p>
-                                                </div>
-                                                <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100/50 col-span-2 flex justify-between items-center">
-                                                    <span className="text-xs text-gray-500 font-medium">總上傳影片數</span>
-                                                    <span className="font-bold text-gray-900">{(ch.video_count || ch.igtvVideoCount || 0).toLocaleString()} <span className="text-xs text-gray-400 font-normal">部</span></span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="col-span-full bg-white p-12 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-gray-400">
-                                        <LineChart className="w-12 h-12 mb-4 text-gray-300" />
-                                        <p>目前尚無頻道資料</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Render Tags Analysis */}
-                    {currentView === 'tags' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            <header className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100 gap-4">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-                                        <Hash className="w-8 h-8" />
-                                    </div>
-                                    <div>
-                                        <h1 className="text-2xl font-bold text-gray-900 leading-tight">
-                                            熱門標籤分析矩陣
-                                        </h1>
-                                        <p className="text-xs text-gray-500 font-medium">透視哪些關鍵字為您帶來最多流量與互動</p>
-                                    </div>
-                                </div>
-                            </header>
-
-                            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/30">
-                                    <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                                        流量紅利排行榜 (Top 50)
-                                    </h2>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left text-gray-500">
-                                        <thead className="text-xs text-gray-400 uppercase bg-gray-50/80">
-                                            <tr>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap">標籤名稱 (Hashtag)</th>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap text-right">出現次數</th>
-                                                <th className="px-6 py-4 font-semibold text-right">累積觀看流量</th>
-                                                <th className="px-6 py-4 font-semibold whitespace-nowrap text-right">平均互動率 (ER)</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {isLoading ? (
-                                                [...Array(5)].map((_, i) => (
-                                                    <tr key={i} className="border-b border-gray-50"><td colSpan={4} className="px-6 py-4"><div className="h-10 bg-gray-100 rounded animate-pulse"></div></td></tr>
-                                                ))
-                                            ) : tagsStats.length > 0 ? (
-                                                tagsStats.map((item, index) => (
-                                                    <tr key={item.tag} className="bg-white border-b border-gray-50 hover:bg-gray-50/50 transition-colors group">
-                                                        <td className="px-6 py-4">
-                                                            <div className="flex items-center gap-3">
-                                                                <span className={`w-6 text-center font-bold ${index < 3 ? 'text-indigo-600' : 'text-gray-300'}`}>
-                                                                    {index + 1}
-                                                                </span>
-                                                                <span className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">#{item.tag}</span>
-                                                            </div>
-                                                        </td>
-                                                        <td className="px-6 py-4 text-right font-medium text-gray-600">
-                                                            {item.count} <span className="text-xs text-gray-400 font-normal">次</span>
-                                                        </td>
-                                                        <td className="px-6 py-4 text-right">
-                                                            <div className="font-bold text-gray-900 text-base">{(item.views).toLocaleString()}</div>
-                                                        </td>
-                                                        <td className="px-6 py-4 text-right">
-                                                            <div className="inline-flex items-center justify-end gap-1.5 font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-md">
-                                                                {item.avgEr}%
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                ))
-                                            ) : (
-                                                <tr>
-                                                    <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
-                                                        <Hash className="w-10 h-10 mx-auto text-gray-300 mb-3" />
-                                                        沒有分析出任何標籤數據
-                                                    </td>
-                                                </tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {currentView === 'channel-analytics' && (
-                        <div className="max-w-7xl mx-auto space-y-6">
-                            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-2">
-                                <div className="flex items-center gap-3">
-                                    <svg className="text-red-500 w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
-                                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-                                    </svg>
-                                    <div>
-                                        <h2 className="text-2xl font-bold text-gray-900">頻道與影片全分析</h2>
-                                        <p className="text-sm text-gray-500">統整基礎社群數據與 YouTube YouTube Analytics 深度維度</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Top Channel Tabs */}
-                            <div className="flex gap-2 overflow-x-auto pb-2 border-b border-gray-200 hide-scrollbar">
-                                {uniqueChannels
-                                    .filter(c => c.platform === 'youtube')
-                                    .map(c => (
+                                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mb-3">社群平台 (Platforms)</p>
+                                    <div className="flex flex-wrap gap-2">
                                         <button
-                                            key={c.id}
-                                            onClick={() => setSelectedChannelTab(c.id)}
-                                            className={`px-4 py-2.5 whitespace-nowrap text-sm font-bold rounded-t-lg transition-colors border-b-2 ${selectedChannelTab === c.id || (uniqueChannels.length > 0 && !selectedChannelTab && uniqueChannels[0].id === c.id)
-                                                ? 'border-red-500 text-red-600 bg-red-50/50'
-                                                : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+                                            onClick={() => toggleFilter('all', setActivePlatforms)}
+                                            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all border ${activePlatforms.length === 0
+                                                ? 'bg-indigo-500 text-white border-indigo-400 shadow-[0_0_15px_-3px_rgba(99,102,241,0.4)]'
+                                                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
                                                 }`}
                                         >
-                                            {c.name}
+                                            所有平台
                                         </button>
-                                    ))}
-                            </div>
+                                        {Array.from(new Set(videos.map(v => v.platform))).filter(Boolean).map(plat => (
+                                            <button
+                                                key={plat}
+                                                onClick={() => toggleFilter(plat, setActivePlatforms)}
+                                                className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all border ${activePlatforms.includes(plat)
+                                                    ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500 shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]'
+                                                    : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-200'
+                                                    }`}
+                                            >
+                                                {plat}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
 
-                            {/* Video Data List for Selected Tab */}
-                            <div className="space-y-4 relative">
-                                {latestFilteredData
-                                    .filter(d => {
-                                        const currentTab = selectedChannelTab || (uniqueChannels.find(c => c.platform === 'youtube')?.id);
-                                        return d.platform === 'youtube' && (d.channels?.id === currentTab || d.channel_id === currentTab);
-                                    })
-                                    .map(post => {
-                                        // Fake Retention Data for Sparkline based on Python tests
-                                        const isPeak1 = post.viewCount ? post.viewCount % 2 === 0 : false;
-                                        const mockSparkline = Array.from({ length: 20 }, (_, i) => {
-                                            const base = 100 - (i * 3); // 逐漸下滑
-                                            let val = Math.max(10, base + (Math.random() * 5 - 2));
-                                            // 模擬一個 drop
-                                            if (i === 5) val -= 15;
-                                            // 模擬一個 peak
-                                            if (isPeak1 && i === 12) val += 10;
-                                            return { progress: i * 5, retention: val };
-                                        });
+                                {/* Channel Filters */}
+                                <div>
+                                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mb-3">創作者頻道 (Channels)</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            onClick={() => toggleFilter('all', setActiveChannels)}
+                                            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all border ${activeChannels.length === 0
+                                                ? 'bg-emerald-500 text-white border-emerald-400 shadow-[0_0_15px_-3px_rgba(16,185,129,0.4)]'
+                                                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
+                                                }`}
+                                        >
+                                            所有頻道
+                                        </button>
+                                        {Array.from(new Set(videos.map(v => v.channel))).map((channel) => (
+                                            <button
+                                                key={channel}
+                                                onClick={() => toggleFilter(channel, setActiveChannels)}
+                                                className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all border ${activeChannels.includes(normalizeString(channel))
+                                                    ? 'bg-emerald-500 text-white border-emerald-400 shadow-[0_0_15px_-3px_rgba(16,185,129,0.4)]'
+                                                    : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
+                                                    }`}
+                                            >
+                                                {channel}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
 
-                                        return (
-                                            <div key={post.id} className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm hover:shadow-md transition-shadow grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-
-                                                {/* Col 1: Base Info */}
-                                                <div className="lg:col-span-4 flex gap-4">
-                                                    <div className="w-32 h-20 bg-gray-100 rounded-lg shrink-0 overflow-hidden relative group">
-                                                        {post.url ? (
-                                                            <img src={`https://img.youtube.com/vi/${post.url.split('v=')[1]}/mqdefault.jpg`} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = 'none'} />
-                                                        ) : (
-                                                            <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                                                                <svg className="w-8 h-8 text-gray-400" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" /></svg>
-                                                            </div>
-                                                        )}
-                                                        {post.url && (
-                                                            <a href={post.url} target="_blank" rel="noreferrer" className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <ExternalLink className="w-6 h-6 text-white" />
-                                                            </a>
-                                                        )}
-                                                    </div>
-                                                    <div className="flex flex-col justify-center min-w-0">
-                                                        <h4 className="text-[15px] font-bold text-gray-900 line-clamp-2 leading-tight" title={post.title}>{post.title}</h4>
-                                                        <div className="flex items-center gap-2 mt-2">
-                                                            <span className="bg-red-50 text-red-600 text-xs px-2 py-0.5 rounded font-medium">YouTube</span>
-                                                            <span className="text-xs text-gray-400">{new Date(post.timestamp!).toLocaleDateString()}</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                {/* Col 2: Social Metrics */}
-                                                <div className="lg:col-span-3 grid grid-cols-2 gap-y-3 gap-x-2 border-l border-gray-100 pl-4">
-                                                    <div>
-                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">總觀看</p>
-                                                        <p className="text-[15px] font-bold text-gray-800">{(post.viewCount || 0).toLocaleString()}</p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">互動率 ER</p>
-                                                        <p className="text-[15px] font-bold text-gray-800">{post.er}%</p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">按讚</p>
-                                                        <p className="text-sm font-semibold text-gray-600">{(post.likeCount || 0).toLocaleString()}</p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[11px] text-gray-400 font-medium mb-0.5">留言</p>
-                                                        <p className="text-sm font-semibold text-gray-600">{(post.commentCount || 0).toLocaleString()}</p>
-                                                    </div>
-                                                </div>
-
-                                                {/* Col 3: YouTube Deep Metrics */}
-                                                <div className="lg:col-span-2 space-y-3 border-l border-gray-100 pl-4">
-                                                    <div>
-                                                        <p className="text-[11px] text-indigo-400 font-bold mb-0.5 uppercase tracking-wide flex items-center gap-1">
-                                                            <Activity className="w-3 h-3" /> 均看時長
-                                                        </p>
-                                                        <p className="text-[15px] font-bold text-indigo-900">
-                                                            {post.youtubeMetrics?.average_view_duration_seconds
-                                                                ? `${Math.floor(post.youtubeMetrics.average_view_duration_seconds / 60)}分${Math.floor(post.youtubeMetrics.average_view_duration_seconds % 60)}秒`
-                                                                : '--'}
-                                                        </p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[11px] text-emerald-500 font-bold mb-0.5 uppercase tracking-wide flex items-center gap-1">
-                                                            <TrendingUp className="w-3 h-3" /> 淨增訂閱
-                                                        </p>
-                                                        <p className={`text-sm font-bold ${((post.youtubeMetrics?.subscribers_gained || 0) - (post.youtubeMetrics?.subscribers_lost || 0)) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                                                            {((post.youtubeMetrics?.subscribers_gained || 0) - (post.youtubeMetrics?.subscribers_lost || 0)) > 0 ? '+' : ''}{((post.youtubeMetrics?.subscribers_gained || 0) - (post.youtubeMetrics?.subscribers_lost || 0)) || '--'}
-                                                        </p>
-                                                    </div>
-                                                </div>
-
-                                                {/* Col 4: Retention Sparkline */}
-                                                <div className="lg:col-span-3 border-l border-gray-100 pl-4 flex flex-col justify-center">
-                                                    <p className="text-[11px] text-gray-400 font-medium mb-1 flex items-center justify-between">
-                                                        <span>Audience Retention 觀眾留存曲線</span>
-                                                    </p>
-                                                    <div className="h-16 w-full -ml-2">
-                                                        <ResponsiveContainer width="100%" height="100%">
-                                                            <AreaChart data={mockSparkline} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                                                                <defs>
-                                                                    <linearGradient id={`colorRet${post.id}`} x1="0" y1="0" x2="0" y2="1">
-                                                                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
-                                                                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                                                                    </linearGradient>
-                                                                </defs>
-                                                                <Area type="monotone" dataKey="retention" stroke="#ef4444" strokeWidth={2} fill={`url(#colorRet${post.id})`} isAnimationActive={false} />
-                                                            </AreaChart>
-                                                        </ResponsiveContainer>
-                                                    </div>
-                                                </div>
-
-                                            </div>
-                                        )
-                                    })}
-
-                                {latestFilteredData.filter(d => {
-                                    const currentTab = selectedChannelTab || (uniqueChannels.find(c => c.platform === 'youtube')?.id);
-                                    return d.platform === 'youtube' && (d.channels?.id === currentTab || d.channel_id === currentTab);
-                                }).length === 0 && (
-                                        <div className="py-20 text-center">
-                                            <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" viewBox="0 0 24 24" fill="currentColor">
-                                                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-                                            </svg>
-                                            <h3 className="text-lg font-bold text-gray-700">該頻道目前沒有影片資料</h3>
-                                            <p className="text-gray-500 mt-1">請等待資料庫同步或選擇其他頻道</p>
-                                        </div>
-                                    )}
+                                {/* Data Source Filters */}
+                                <div className="pt-2">
+                                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mb-3">數據深度 (Data Source)</p>
+                                    <div className="flex flex-wrap gap-3">
+                                        <button
+                                            onClick={() => setOnlyHasRetention(!onlyHasRetention)}
+                                            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all border ${onlyHasRetention
+                                                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-[0_0_12px_-4px_rgba(16,185,129,0.5)]'
+                                                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
+                                                }`}
+                                        >
+                                            <BarChart2 className={`w-4 h-4 ${onlyHasRetention ? 'animate-pulse' : ''}`} />
+                                            <span className="text-sm font-bold">僅顯示有續看數據</span>
+                                        </button>
+                                        <button
+                                            onClick={() => setOnlyHasSlides(!onlyHasSlides)}
+                                            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all border ${onlyHasSlides
+                                                ? 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_12px_-4px_rgba(99,102,241,0.5)]'
+                                                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
+                                                }`}
+                                        >
+                                            <Focus className={`w-4 h-4 ${onlyHasSlides ? 'animate-pulse' : ''}`} />
+                                            <span className="text-sm font-bold">僅顯示有畫面解剖</span>
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                    )}
 
+                        {/* 影片清單與功過表面板容器移至外部以防止受 max-h-0 影響 */}
+                    </div>
+                    {/* 影片清單與功過表面板 */}
+                    <div className="space-y-6">
+                        {filteredVideos.map((video) => {
+                            const isExpanded = expandedVideoId === video.id;
+
+                            return (
+                                <div
+                                    key={video.id}
+                                    className={`rounded-2xl border transition-all duration-500 overflow-hidden ${isExpanded
+                                        ? 'bg-[#151E32] border-indigo-500/30 shadow-[0_0_40px_-10px_rgba(99,102,241,0.15)]'
+                                        : 'bg-[#0F172A] border-gray-800 hover:border-gray-700 cursor-pointer'
+                                        }`}
+                                >
+                                    {/* 影片卡片標題列 (A. 全局統整標籤與 KPI) */}
+                                    <div
+                                        className="p-6 md:p-8 flex flex-col xl:flex-row gap-8 xl:items-center cursor-pointer group"
+                                        onClick={() => setExpandedVideoId(isExpanded ? null : video.id)}
+                                    >
+                                        <div className="flex gap-6 flex-1 min-w-0 flex-col sm:flex-row items-start sm:items-center">
+                                            <div className="w-full sm:w-48 aspect-video rounded-xl overflow-hidden shrink-0 relative bg-gray-900 ring-1 ring-white/10 group-hover:ring-indigo-500/50 transition-all">
+                                                {/* Fetch valid YouTube Thumbnail based on video ID */}
+                                                <img src={video.thumbnail} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" alt="thumbnail" />
+                                                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent"></div>
+                                                <span className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/70 backdrop-blur-sm rounded text-[10px] font-bold text-white tracking-wider">
+                                                    {video.kpi.watchTime}
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-col justify-center min-w-0 pr-4">
+                                                <div className="flex items-center gap-3 mb-2">
+                                                    <span className="bg-red-500/10 text-red-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest border border-red-500/20">{video.platform} · {video.channel}</span>
+                                                    <span
+                                                        className="bg-indigo-500/10 text-indigo-400 px-2.5 py-1 rounded text-[13px] font-mono border border-indigo-500/20 cursor-pointer hover:bg-indigo-500/20 transition-all active:scale-95 flex items-center gap-2"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            navigator.clipboard.writeText(video.originalId);
+                                                            setCopiedTitleId(video.id + '_id');
+                                                            setTimeout(() => setCopiedTitleId(null), 2000);
+                                                        }}
+                                                        title="點擊複製 ID"
+                                                    >
+                                                        {copiedTitleId === video.id + '_id' ? (
+                                                            <>
+                                                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                                                <span className="text-emerald-400">COPIED</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Database className="w-3.5 h-3.5 opacity-50" />
+                                                                <span>ID: {video.originalId}</span>
+                                                                <div className="flex items-center gap-1 border-l border-indigo-500/20 pl-2 ml-1">
+                                                                    <BarChart2
+                                                                        className={`w-3.5 h-3.5 ${video.hasRetention ? 'text-emerald-400' : 'text-gray-600 opacity-20'}`}
+                                                                    />
+                                                                    <Focus
+                                                                        className={`w-3.5 h-3.5 ${video.hasSlides ? 'text-indigo-400' : 'text-gray-600 opacity-20'}`}
+                                                                    />
+                                                                </div>
+                                                            </>
+                                                        )}
+                                                    </span>
+                                                    <span className="text-gray-400 text-xs font-mono">{video.publishedAt}</span>
+                                                </div>
+
+                                                <div className="relative group/title mb-3 flex items-start gap-4">
+                                                    <h3 className="text-xl font-bold text-white group-hover:text-indigo-400 transition-colors line-clamp-2 leading-snug flex-1"
+                                                        title={video.title}>
+                                                        {video.title}
+                                                    </h3>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            navigator.clipboard.writeText(video.title);
+                                                            setCopiedTitleId(video.id + '_title');
+                                                            setTimeout(() => setCopiedTitleId(null), 2000);
+                                                        }}
+                                                        className="shrink-0 p-2 bg-gray-800 hover:bg-indigo-500 rounded-lg text-gray-300 hover:text-white transition-all shadow-lg border border-gray-700 hover:border-indigo-400 flex items-center gap-2 opacity-0 group-hover/title:opacity-100"
+                                                        title="複製標題"
+                                                    >
+                                                        {copiedTitleId === video.id + '_title' ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                                                        <span className="text-xs font-bold uppercase tracking-tighter">{copiedTitleId === video.id + '_title' ? '已複製' : '複製標題'}</span>
+                                                    </button>
+                                                </div>
+
+                                                <div className="flex flex-wrap gap-2">
+                                                    {video.tags.map((tag, idx) => (
+                                                        <span key={idx} className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-white/5 text-gray-300 border border-white/5">
+                                                            <Hash className="w-3 h-3 text-indigo-400" /> {typeof tag === 'string' ? tag.replace(/\[|\]|"/g, '') : tag}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 趨勢小線圖 (Sparklines) */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-4 gap-3 xl:w-[480px] shrink-0 mt-4 xl:mt-0 pb-4 xl:pb-0 pr-4">
+                                            {[
+                                                { key: 'views', label: '觀看', color: '#10B981', icon: Eye },
+                                                { key: 'likes', label: '按讚', color: '#F43F5E', icon: ThumbsUp },
+                                                { key: 'saves', label: '收藏', color: '#6366F1', icon: Bookmark },
+                                                { key: 'comments', label: '留言', color: '#F59E0B', icon: Target }
+                                            ].map((metric) => {
+                                                const tl = video.timelineData;
+                                                const validTl = tl.filter(t => t[metric.key as keyof typeof t] !== 0);
+                                                const lastVal = validTl.length > 0 ? validTl[validTl.length - 1][metric.key as keyof typeof validTl[0]] : 0;
+
+                                                return (
+                                                    <div key={metric.key} className="bg-[#0B0F19]/60 rounded-xl border border-white/5 overflow-hidden flex flex-col pt-3 relative group/spark mx-1 sm:mx-0">
+                                                        <div className="px-3 flex justify-between items-start z-10">
+                                                            <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest flex items-center gap-1"><metric.icon className="w-3 h-3" /> {metric.label}</p>
+                                                            <p className={`text-sm font-bold`} style={{ color: metric.color }}>{typeof lastVal === 'number' ? lastVal.toLocaleString() : lastVal}</p>
+                                                        </div>
+                                                        <div className="h-10 w-full mt-1 relative -bottom-1">
+                                                            {validTl.length > 1 ? (
+                                                                <ResponsiveContainer width="100%" height="100%">
+                                                                    <LineChart data={validTl} margin={{ top: 2, right: 3, left: 3, bottom: 0 }}>
+                                                                        <Line type="monotone" dataKey={metric.key} stroke={metric.color} strokeWidth={2} dot={false} isAnimationActive={false} />
+                                                                    </LineChart>
+                                                                </ResponsiveContainer>
+                                                            ) : (
+                                                                <div className="w-full h-full flex items-center justify-center text-[9px] text-gray-700 font-bold">INSUFFICIENT DATA</div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+
+                                        <div className="hidden xl:flex items-center justify-center p-4">
+                                            <ChevronDown className={`w-6 h-6 text-gray-500 transition-transform duration-500 ${isExpanded ? 'rotate-180 text-indigo-400' : 'group-hover:text-white'}`} />
+                                        </div>
+                                    </div>
+
+                                    {/* 展開面板：B, C, D 功能區 */}
+                                    <div className={`grid transition-all duration-500 ease-in-out ${isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                                        <div className="overflow-hidden">
+                                            <VideoDetailPanel video={video} allSlidesData={allSlidesData} />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
                 </main>
-            </div >
-        </div >
+            </div>
+        </div>
     );
 }
-
