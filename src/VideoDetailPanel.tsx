@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
-import { Activity, Eye, Zap, BarChart2, Layers, Focus, Lightbulb, TrendingUp, Music, Timer, CheckCircle2, Maximize2, X } from 'lucide-react';
+import { Activity, Eye, Zap, BarChart2, Layers, Focus, Lightbulb, TrendingUp, Music, Timer, CheckCircle2, Maximize2, X, AlertCircle, Copy } from 'lucide-react';
 
 interface VideoData {
     id: string;
     originalId: string;
+    sheetIndex: number; // 用於絕對唯一 ID 分辨
     title: string;
     channel: string;
     platform: string;
@@ -12,11 +13,25 @@ interface VideoData {
     publishedAt: string;
     timestamp: number;
     kpi: { views: number | string; likes: number | string; comments: number | string; watchTime: string; er: number | string; subs: number | string };
-    tags: string[];
+    l1Tags: string[];
+    l2Tags: string[];
     retentionData: any[];
-    dropEvents: any[];
+    dropEvents: Array<{
+        timeIndex: number;
+        timeLabel: string;
+        severity: string;
+        slideInsights: {
+            role: string;
+            visual: string;
+            trigger: string;
+            aiSummary: string;
+            imageText: string;
+            videoPrompt: string;
+            strategy: string;
+        }
+    }>;
+    timelineData: Array<{ day: string; views?: number; likes?: number; saves?: number; comments?: number }>;
     maxDuration: number;
-    timelineData: Array<{ day: string; views: number; likes: number; saves: number; comments: number }>;
     depthMetrics?: {
         averageRetention: number;
         averageWatchTime: string;
@@ -30,6 +45,9 @@ interface VideoData {
         coreDropEnd: string;
         coreDropSeverity: number;
     };
+    hasRetention: boolean;
+    hasSlides: boolean;
+    strategyLabels?: any[];
 }
 
 export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; allSlidesData: any[] }) {
@@ -61,9 +79,9 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
     const displayAuditory = matchedSlide?.auditory_vibe ?? '—';
     const displayTrigger = matchedSlide?.psychological_trigger ?? targetEvent?.slideInsights?.trigger ?? '—';
     const displayPacing = matchedSlide?.speech_pacing ? `${matchedSlide.speech_pacing} 字/秒` : null;
-    const displayImageText = matchedSlide?.image_text_content_ch ?? targetEvent?.slideInsights?.imageText ?? '—';
-    const displayVideoPrompt = matchedSlide?.video_prompt_ch ?? targetEvent?.slideInsights?.videoPrompt ?? '—';
-    const displayStrategy = matchedSlide?.tag_alignment_content ?? targetEvent?.slideInsights?.strategy ?? '—';
+    const displayImageText = matchedSlide?.image_text_ch ?? targetEvent?.slideInsights?.imageText ?? '—';
+    const displayVideoPrompt = matchedSlide?.speech_content_ch ?? targetEvent?.slideInsights?.videoPrompt ?? '—';
+    const displayStrategy = matchedSlide?.tag_alignment ?? targetEvent?.slideInsights?.strategy ?? '—';
     const displayTime = `0${Math.floor(pinnedSecond / 60)}:${String(Math.floor(pinnedSecond % 60)).padStart(2, '0')}`;
 
     const panelColor = isPositive ? 'bg-emerald-950/20 border-emerald-900/50' : 'bg-rose-950/20 border-rose-900/50';
@@ -120,6 +138,68 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
             </g>
         );
     };
+
+    // 核心流失診斷引擎邏輯 - 精細分析版
+    const generateDiagnosticReport = () => {
+        const isInCoreDrop = pinnedSecond >= coreStart && pinnedSecond <= coreEnd && coreStart > 0;
+        if (!isInCoreDrop) return null;
+
+        const currentStrategy = video.strategyLabels?.[0];
+        const pacing = Number(matchedSlide?.speech_pacing) || 0;
+        const textLength = matchedSlide?.image_text_ch?.length || 0;
+        const role = matchedSlide?.role || "";
+        const strategyProto = currentStrategy?.l1_hook_psychology_prototype || "";
+        const conflictType = currentStrategy?.l1_conflict_type || "";
+        const visualEvidence = matchedSlide?.visual_evidence || "";
+
+        // 動態診斷變數
+        let status = "🔴 核心流失深度診斷中...";
+        let visualCause = "視覺聯動弱化：目前畫面呈現模式與旁白核心重點匹配度下降，導致觀眾注意力暫時游離。";
+        let strategyIssue = "心理觸發過期：此處缺乏新的心理觸發點 (Trigger)，敘事動力在此刻中斷。";
+
+        // 1. 視覺診斷精細化
+        if (textLength > 35) {
+            status = "🔴 流失診斷：視覺資訊過載";
+            visualCause = `圖片文字過多 (${textLength} 字)：觀眾在極短時間內難以同時處理大量文字與音頻，導致閱讀疲勞、注意力流失。`;
+        } else if (role.includes("Cover") || role.includes("Opening") || role === "Topic") {
+            status = "🔴 流失診斷：畫面變化停滯";
+            visualCause = `靜態元素過久 (${role})：當下畫面以靜態標題或封面為主，停留時長推測已超過觀眾對單一畫面的耐受度（3.5s）。`;
+        } else if (visualEvidence.length < 15 && pacing > 2.8) {
+            status = "🔴 流失診斷：視覺論證力不足";
+            visualCause = "畫面過於空洞：旁白正在快速輸出，但視覺上缺乏具體的【數據看板】或【動作特寫】來支撐內容，造成感知斷層。";
+        } else if (pacing > 3.2 && textLength < 10) {
+            status = "🔴 流失診斷：視聽感官失調";
+            visualCause = "資訊不對等：音頻節奏極快但畫面極簡，觀眾無法將聽覺資訊與視覺證據快速連結。";
+        } else if (role === "KeyPoint" && textLength < 5) {
+            status = "🔴 流失診斷：重點強調缺失";
+            visualCause = "關鍵點未標註：目前進入核心觀點區，但畫面缺乏對關鍵詞的視覺強調，觀眾難以在快速切換中抓住重點。";
+        }
+
+        // 2. 策略診斷深化
+        if (pacing > 0 && pacing < 2.3 && !role.includes("Hook")) {
+            strategyIssue = `敘事節奏癱瘓 (語速 ${pacing})：此處語速顯著低於爆款均值 (2.8+)，敘事張力鬆弛，導致觀眾在此刻分心。`;
+        } else if (strategyProto.includes("利益") || strategyProto.includes("承諾")) {
+            if (pacing < 2.5) {
+                strategyIssue = "利益期待感消失：使用了利益誘導策略但節奏緩慢，未能維持「即將揭曉內容」的強烈期待。";
+            }
+        } else if (conflictType.includes("反差") || conflictType.includes("衝突")) {
+            strategyIssue = "立場衝突軟化：雖設定了立場反差，但此處缺乏對「對立觀點」的具體描繪，導致衝突感流於表面。";
+        } else if (role === "End" || role === "CTA") {
+            strategyIssue = "結尾動力斷層：進入 CTA 階段但缺乏具體的「行動誘因」或「預期回報」，導致觀眾提前退出。";
+        }
+
+        return {
+            status,
+            visualCause,
+            strategyIssue,
+            llmPrompt: `你現在是一位專業的 YouTube 數據編導。針對這段流失區間（${displayTime}），
+            診斷結果：[視覺] ${visualCause}，[策略] ${strategyIssue}。
+            參考當前畫面：[${role}] ${visualEvidence || '內容單一'}。
+            請根據「${conflictType || '預期反差'}」的核心轉折邏輯，重新生成 3 組 10 秒內的改進腳本，要求將語速優化至 3.2 字/秒，並在視覺上加入具體的【數據證據】或【動作轉場】以彌補流失。`
+        };
+    };
+
+    const diagnosticReport = generateDiagnosticReport();
 
     return (
         <div className="p-4 md:p-5 pt-0 border-t border-gray-800/50 grid grid-cols-1 lg:grid-cols-12 gap-4 mt-1">
@@ -365,7 +445,7 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
                         </div>
                         <div>
                             <h5 className={`font-bold ${titleColor} flex items-center gap-2`}>
-                                📍 Slide {matchedSlide?.slide_id || '—'} 畫面解剖
+                                📍 Slide {matchedSlide?.slide_no || '—'} 畫面解剖
                                 <span className="text-sm font-mono opacity-50 font-normal">|</span>
                                 <span className="text-sm font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
                                     {matchedSlide ? `${matchedSlide.start_time}s ~ ${matchedSlide.end_time}s` : displayTime}
@@ -455,18 +535,62 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
                     </div>
                 </div>
 
-                {/* AI 改善總結 (D component) */}
-                {targetEvent && (
-                    <div className="bg-gradient-to-br from-indigo-900/40 to-purple-900/20 border border-indigo-500/20 p-6 rounded-2xl relative overflow-hidden group shadow-lg">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl mix-blend-screen transition-transform group-hover:scale-150"></div>
-                        <h5 className="font-bold text-indigo-300 text-[13px] uppercase tracking-widest mb-3 flex items-center gap-2 relative z-10">
-                            <Lightbulb className="w-4 h-4 text-amber-400" /> AI 下一步優化總結 (Next Steps)
-                        </h5>
-                        <p className="text-sm text-indigo-100/90 leading-relaxed relative z-10 font-medium">
-                            {targetEvent.slideInsights.aiSummary}
-                        </p>
-                    </div>
-                )}
+                {/* AI 改善總結與核心診斷 (D component) */}
+                <div className="flex flex-col gap-4">
+                    {/* 核心流失診斷區 (僅在流失區間顯示) */}
+                    {diagnosticReport && (
+                        <div className="bg-rose-500/10 border border-rose-500/30 p-5 rounded-2xl relative overflow-hidden group shadow-lg">
+                            <div className="flex items-center gap-2 mb-3">
+                                <AlertCircle className="w-5 h-5 text-rose-400 animate-pulse" />
+                                <h5 className="font-bold text-rose-400 text-[13px] uppercase tracking-widest">
+                                    {diagnosticReport.status}
+                                </h5>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                <div className="space-y-1">
+                                    <p className="text-[10px] text-rose-300/60 font-bold uppercase tracking-widest">視覺誘因診斷</p>
+                                    <p className="text-sm text-gray-200 font-medium">{diagnosticReport.visualCause}</p>
+                                </div>
+                                <div className="space-y-1">
+                                    <p className="text-[10px] text-indigo-300/60 font-bold uppercase tracking-widest">底層策略診斷</p>
+                                    <p className="text-sm text-gray-200 font-medium">{diagnosticReport.strategyIssue}</p>
+                                </div>
+                            </div>
+                            <div className="bg-black/40 border border-rose-500/20 p-4 rounded-xl">
+                                <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest mb-2 flex items-center gap-2">
+                                    <Zap className="w-3 h-3" /> LLM 行動製作指令 (自動產出)
+                                </p>
+                                <div className="relative group/prompt">
+                                    <p className="text-xs text-gray-400 italic leading-relaxed line-clamp-2 group-hover/prompt:line-clamp-none transition-all">
+                                        {diagnosticReport.llmPrompt}
+                                    </p>
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(diagnosticReport.llmPrompt);
+                                            alert("LLM Prompt 已複製！您可以直接貼給腳本編導 AI。");
+                                        }}
+                                        className="mt-2 flex items-center gap-2 text-[10px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
+                                    >
+                                        <Copy className="w-3 h-3" /> 複製完整製作指令並生成 3 組新腳本
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 常規 AI 優化建議 */}
+                    {targetEvent && (
+                        <div className="bg-gradient-to-br from-indigo-900/40 to-purple-900/20 border border-indigo-500/20 p-6 rounded-2xl relative overflow-hidden group shadow-lg">
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl mix-blend-screen transition-transform group-hover:scale-150"></div>
+                            <h5 className="font-bold text-indigo-300 text-[13px] uppercase tracking-widest mb-3 flex items-center gap-2 relative z-10">
+                                <Lightbulb className="w-4 h-4 text-amber-400" /> AI 獲客與留存總結 (Insights)
+                            </h5>
+                            <p className="text-sm text-indigo-100/90 leading-relaxed relative z-10 font-medium">
+                                {targetEvent.slideInsights.aiSummary}
+                            </p>
+                        </div>
+                    )}
+                </div>
 
             </div>
             {/* --- 全螢幕影片分析戰情室 (Studio Mode Overlay) --- */}

@@ -30,7 +30,8 @@ interface VideoData {
     publishedAt: string;
     timestamp: number;
     kpi: { views: number | string; likes: number | string; comments: number | string; watchTime: string; er: number | string; subs: number | string };
-    tags: string[];
+    l1Tags: string[];
+    l2Tags: string[];
     retentionData: any[];
     dropEvents: Array<{
         timeIndex: number;
@@ -46,7 +47,7 @@ interface VideoData {
             strategy: string;
         }
     }>;
-    timelineData: Array<{ day: string; views: number; likes: number; saves: number; comments: number }>;
+    timelineData: Array<{ day: string; views?: number; likes?: number; saves?: number; comments?: number }>;
     maxDuration: number;
     depthMetrics?: {
         averageRetention: number;
@@ -63,6 +64,7 @@ interface VideoData {
     };
     hasRetention: boolean;
     hasSlides: boolean;
+    strategyLabels?: any[];
 }
 
 export default function ContentAttributionEngine() {
@@ -120,9 +122,9 @@ export default function ContentAttributionEngine() {
             else setIsLoading(true);
 
             // 1. Fetch Supabase DB: Retention (Drops) & Slides (Visual elements) & Tags
-            const { data: retData } = await supabase.from('yt_retention_analysis').select('*');
-            const { data: slidesData } = await supabase.from('video_slides_analysis').select('*');
-            const { data: tagsData } = await supabase.from('video_strategy_labels').select('*');
+            const { data: retData } = await supabase.from('yt_retention_analysis').select('*').order('created_at', { ascending: false });
+            const { data: slidesData } = await supabase.from('video_slides_analysis').select('*').order('created_at', { ascending: false });
+            const { data: tagsData } = await supabase.from('video_strategy_labels').select('*').order('created_at', { ascending: false });
             if (slidesData) setAllSlidesData(slidesData);
 
             // 2. Fetch Google Sheet Data (KPIs and Base Info)
@@ -149,21 +151,59 @@ export default function ContentAttributionEngine() {
                         const platformNorm = normalizeString(rawPlatform);
                         const channelNorm = normalizeString(rawChannel);
 
-                        let vId = '';
-                        if (url) {
-                            if (url.includes('youtube.com/shorts/')) vId = url.split('youtube.com/shorts/')[1].split('?')[0];
-                            else if (url.includes('watch?v=')) vId = url.split('watch?v=')[1].split('&')[0];
-                            else if (url.includes('youtu.be/')) vId = url.split('youtu.be/')[1].split('?')[0];
-                            else if (url.includes('instagram.com/')) vId = url.split('instagram.com/')[1].split('/')[1] || String(row['ID'] || '');
-                            else if (url.includes('threads.net/')) vId = url.split('threads.net/')[1].split('/')[1] || String(row['ID'] || '');
-                            else vId = String(row['ID'] || '');
-                        }
+                        // 1. 強化 ID 提取邏輯：支援多種 URL 格式與後備機制
+                        const getVid = (u: string) => {
+                            if (!u) return '';
+                            // YouTube Shorts
+                            let m = u.match(/shorts\/([a-zA-Z0-9_-]{11})/);
+                            if (m) return m[1];
+                            // YouTube Watch
+                            m = u.match(/v=([a-zA-Z0-9_-]{11})/);
+                            if (m) return m[1];
+                            // YouTube youtu.be
+                            m = u.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+                            if (m) return m[1];
+                            // Instagram Reel/P
+                            m = u.match(/(?:reel|p)\/([a-zA-Z0-9_-]+)/);
+                            if (m) return m[1];
+                            return '';
+                        };
+
+                        let vId = getVid(url) || String(row['ID'] || '').trim();
 
                         // 使 ID 絕對唯一 (平台_影片ID_行號)，防止 React Key 碰撞
                         const uniqueId = `${platformNorm}_${vId || 'NOID'}_${index}`;
 
-                        // 配對 Supabase DB 數據
-                        const vTags = tagsData?.filter(t => t.video_id === vId).map(t => t.tags).flat() || ['無標籤'];
+                        // 配對 Supabase DB 數據 (一級與二級標籤聚合)
+                        // 強化：加入 trim 且不區分大小寫匹配 (雖 ID 通常區分，但保險起見)
+                        const strategyRecord = tagsData?.find(t => t.video_id?.trim() === vId.trim()) || {};
+                        const l1Tags: string[] = [];
+                        const l2Tags: string[] = [];
+
+                        Object.entries(strategyRecord).forEach(([key, val]) => {
+                            if (!val || val === 'N/A' || val === '—' || val === '' || key === 'video_id' || key === 'analysis_updated_at') return;
+
+                            const processVal = (v: any): string[] => {
+                                if (Array.isArray(v)) return v.map(String);
+                                if (typeof v === 'string') {
+                                    if (v.startsWith('[') && v.endsWith(']')) {
+                                        try {
+                                            const parsed = JSON.parse(v);
+                                            return Array.isArray(parsed) ? parsed.map(String) : [String(v)];
+                                        } catch (e) { return [String(v)]; }
+                                    }
+                                    return [v];
+                                }
+                                return [String(v)];
+                            };
+
+                            if (key.startsWith('l1_')) {
+                                l1Tags.push(...processVal(val));
+                            } else if (key === 'l2_psych_drivers' || key === 'l2_content_core_dna_display' || key === 'l2_emotional_energy_level_display') {
+                                l2Tags.push(...processVal(val));
+                            }
+                        });
+
                         const videoRetentions = retData?.filter(r => r.video_id === vId) || [];
 
                         // 3. 重建真實留存率曲線 (解讀 retention_csv 每個百分比對應的秒數)
@@ -245,9 +285,9 @@ export default function ContentAttributionEngine() {
                                         role: targetSlide?.role || '未配對到簡報角色',
                                         visual: targetSlide?.visual_evidence || '無對應特徵畫面 (可能發生於動態轉場)',
                                         trigger: targetSlide?.psychological_trigger || '無法解析觸發觀眾痛點的原因',
-                                        imageText: targetSlide?.image_text_content_ch || '—',
-                                        videoPrompt: targetSlide?.video_prompt_ch || '—',
-                                        strategy: targetSlide?.tag_alignment_content || '—',
+                                        imageText: targetSlide?.image_text_ch || '—',
+                                        videoPrompt: targetSlide?.speech_content_ch || '—',
+                                        strategy: targetSlide?.tag_alignment || '—',
                                         aiSummary: isPeak
                                             ? `高潮點歸因成功！發生了大約 +${Math.abs(drop.drop_severity || 0)}% 留存率修正，數據指出此處發生大量重播回看。`
                                             : `系統偵測到觀眾在此發生 -${Math.abs(drop.drop_severity || 0)}% 的斷崖流失。右列為對齊秒數所剖析出的致命簡報特徵。`
@@ -264,7 +304,11 @@ export default function ContentAttributionEngine() {
                         try { ts = new Date(pubDate).getTime(); } catch (e) { }
 
                         // 建立時間序列趨勢資料 (1d, 2d, 3d, 7d, 14d)
+                        // 建立時間序列趨勢資料 (0D, 1d, 2d, 3d, 7d, 14d)
                         const timelineData = [];
+                        // 1. 新增 0D 基準點，數值皆為 0
+                        timelineData.push({ day: '0D', views: 0, likes: 0, saves: 0, comments: 0 });
+
                         const dayMap = [
                             { label: '1D', v: '1d', l: 'Unnamed: 10', s: 'Unnamed: 11', c: 'Unnamed: 12' },
                             { label: '2D', v: '2d', l: 'Unnamed: 14', s: 'Unnamed: 15', c: 'Unnamed: 16' },
@@ -273,14 +317,19 @@ export default function ContentAttributionEngine() {
                             { label: '14D', v: '14d', l: 'Unnamed: 26', s: 'Unnamed: 27', c: 'Unnamed: 28' },
                         ];
                         for (const d of dayMap) {
-                            const views = parseInt(String(row[d.v]).replace(/,/g, '')) || 0;
-                            const likes = parseInt(String(row[d.l]).replace(/,/g, '')) || 0;
-                            const saves = parseInt(String(row[d.s]).replace(/,/g, '')) || 0;
-                            const comments = parseInt(String(row[d.c]).replace(/,/g, '')) || 0;
-                            // 略過完全空值的節點以免線圖斷裂，但若有值就塞入
-                            if (row[d.v]) {
-                                timelineData.push({ day: d.label, views, likes, saves, comments });
+                            const rawVal = String(row[d.v] || '').trim();
+                            // 修正邏輯：即便沒數據 ('-' 或 '') 也 push 物件以固定 X 軸標籤位置
+                            if (rawVal === '-' || rawVal === '') {
+                                timelineData.push({ day: d.label }); // 不包含數字屬性，線會斷開
+                                continue;
                             }
+
+                            const views = parseInt(rawVal.replace(/,/g, '')) || 0;
+                            const likes = parseInt(String(row[d.l] || '0').replace(/,/g, '')) || 0;
+                            const saves = parseInt(String(row[d.s] || '0').replace(/,/g, '')) || 0;
+                            const comments = parseInt(String(row[d.c] || '0').replace(/,/g, '')) || 0;
+
+                            timelineData.push({ day: d.label, views, likes, saves, comments });
                         }
 
                         realVideos.push({
@@ -294,14 +343,16 @@ export default function ContentAttributionEngine() {
                             publishedAt: pubDate,
                             timestamp: ts,
                             kpi: {
-                                views: row['觀看次數'] || row['views'] || 0,
-                                likes: row['按讚數'] || row['likes'] || 0,
-                                comments: row['留言數'] || row['comments'] || 0,
-                                watchTime: row['平均觀看時間'] || row['觀看時間'] || '0:00',
-                                er: row['留言%'] || row['ER(%)'] || 0,
-                                subs: row['獲得訂閱數'] || 0
+                                views: row['觀看次數'] || row['views'] || (timelineData.filter(t => typeof t.views === 'number').pop()?.views) || 0,
+                                likes: row['按讚數'] || row['likes'] || (timelineData.filter(t => typeof t.likes === 'number').pop()?.likes) || 0,
+                                comments: row['留言數'] || row['comments'] || (timelineData.filter(t => typeof t.comments === 'number').pop()?.comments) || 0,
+                                watchTime: row['平均觀看時間'] || row['觀看時間'] || row['average_watch_time'] || '0:00',
+                                er: row['留言%'] || row['ER(%)'] || row['daily_engagement'] || 0,
+                                subs: row['獲得訂閱數'] || row['subs'] || 0
                             },
-                            tags: vTags,
+                            l1Tags: Array.from(new Set(l1Tags)),
+                            l2Tags: Array.from(new Set(l2Tags)),
+                            strategyLabels: Object.keys(strategyRecord).length > 0 ? [strategyRecord] : [],
                             retentionData: retentionCurve,
                             dropEvents: finalEvents,
                             timelineData: timelineData,
@@ -679,12 +730,32 @@ export default function ContentAttributionEngine() {
                                                     </button>
                                                 </div>
 
-                                                <div className="flex flex-wrap gap-2">
-                                                    {video.tags.map((tag, idx) => (
-                                                        <span key={idx} className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-white/5 text-gray-300 border border-white/5">
-                                                            <Hash className="w-3 h-3 text-indigo-400" /> {typeof tag === 'string' ? tag.replace(/\[|\]|"/g, '') : tag}
+                                                <div className="flex flex-col gap-2.5 mt-2">
+                                                    {/* 第一行：一級標籤 (策略/結構) - Indigo */}
+                                                    {video.l1Tags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {video.l1Tags.map((tag, idx) => (
+                                                                <span key={idx} className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 whitespace-nowrap">
+                                                                    <Hash className="w-2.5 h-2.5 text-indigo-400" /> {tag.replace(/\[|\]|"/g, '')}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {/* 第二行：二級標籤 (心理/核心) - Emerald */}
+                                                    {video.l2Tags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {video.l2Tags.map((tag, idx) => (
+                                                                <span key={idx} className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 whitespace-nowrap">
+                                                                    <Activity className="w-2.5 h-2.5 text-emerald-400" /> {tag.replace(/\[|\]|"/g, '')}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {video.l1Tags.length === 0 && video.l2Tags.length === 0 && (
+                                                        <span className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-white/5 text-gray-500 border border-white/5">
+                                                            <Hash className="w-3 h-3 opacity-20" /> 無標籤
                                                         </span>
-                                                    ))}
+                                                    )}
                                                 </div>
                                             </div>
                                         </div>
@@ -698,7 +769,8 @@ export default function ContentAttributionEngine() {
                                                 { key: 'comments', label: '留言', color: '#F59E0B', icon: Target }
                                             ].map((metric) => {
                                                 const tl = video.timelineData;
-                                                const validTl = tl.filter(t => t[metric.key as keyof typeof t] !== 0);
+                                                // 修正：僅過濾出真正有數值的節點，排除為了固定 X 軸而產生的空節點或字串
+                                                const validTl = tl.filter(t => typeof t[metric.key as keyof typeof t] === 'number');
                                                 const lastVal = validTl.length > 0 ? validTl[validTl.length - 1][metric.key as keyof typeof validTl[0]] : 0;
 
                                                 return (
