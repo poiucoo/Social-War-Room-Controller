@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
-import { Activity, Eye, Zap, BarChart2, Layers, Focus, Lightbulb, TrendingUp, Music, Timer, CheckCircle2, Maximize2, X, AlertCircle, Copy } from 'lucide-react';
+import { Activity, Eye, Zap, BarChart2, Layers, Focus, Lightbulb, TrendingUp, Music, Timer, CheckCircle2, Maximize2, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { supabase } from './lib/supabase';
 
 interface VideoData {
     id: string;
@@ -58,6 +59,40 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
     const [pinnedSecond, setPinnedSecond] = useState<number>(targetEvent?.timeIndex ?? 0);
     const [activeTimelineMetrics, setActiveTimelineMetrics] = useState<string[]>(['views', 'likes', 'saves', 'comments']);
     const [isStudioMode, setIsStudioMode] = useState(false);
+    
+    // Gemini API States
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [geminiResponse, setGeminiResponse] = useState<string | null>(null);
+    const [showApiKeyPrompt, setShowApiKeyPrompt] = useState(false);
+    const [apiKeyInput, setApiKeyInput] = useState('');
+    const [lastAnalyzedAt, setLastAnalyzedAt] = useState<string | null>(null);
+    const [isReportExpanded, setIsReportExpanded] = useState(false);
+
+    // Initial load: check if an insight exists in Supabase
+    useEffect(() => {
+        const fetchExistingInsight = async () => {
+            if (!video.originalId) return;
+            const { data, error } = await supabase
+                .from('video_ai_insights')
+                .select('insight_content, created_at')
+                .eq('video_id', video.originalId)
+                .eq('insight_type', 'FULL_VIDEO_CHECKUP')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (data && !error) {
+                setGeminiResponse(data.insight_content);
+                setLastAnalyzedAt(new Date(data.created_at).toLocaleString('zh-TW'));
+                setIsReportExpanded(false); // 讀取舊紀錄預設收合
+            } else {
+                setGeminiResponse(null);
+                setLastAnalyzedAt(null);
+                setIsReportExpanded(false);
+            }
+        };
+        fetchExistingInsight();
+    }, [video.originalId]);
 
     const toggleTimelineMetric = (metric: string) => {
         setActiveTimelineMetrics(prev =>
@@ -188,6 +223,18 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
             strategyIssue = "結尾動力斷層：進入 CTA 階段但缺乏具體的「行動誘因」或「預期回報」，導致觀眾提前退出。";
         }
 
+        const assistantPrompt = `請幫我深度分析這段社群影片的流失節點：
+- **流失區間**：${displayTime}
+- **留存指標**：平均 ${video.depthMetrics?.averageRetention ?? 0}% | 完看 ${video.depthMetrics?.endRetentionRate ?? 0}%
+- **當前畫面特徵**：[角色] ${role} | [文字字數] ${textLength} | [語速] ${pacing} 字/秒
+- **畫面視覺證據**：${visualEvidence || '無'}
+- **影片策略**：[一級] ${video.l1Tags?.join(', ') || '無'} | [二級] ${video.l2Tags?.join(', ') || '無'}
+- **系統初步診斷**：
+  - 視覺誘因：${visualCause}
+  - 底層策略：${strategyIssue}
+
+請根據以上量化數據，結合現代短影音爆款邏輯，精準指出流失的根本原因，並給出具體的「腳本重寫」及「視覺排版」優化建議。`;
+
         return {
             status,
             visualCause,
@@ -195,11 +242,115 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
             llmPrompt: `你現在是一位專業的 YouTube 數據編導。針對這段流失區間（${displayTime}），
             診斷結果：[視覺] ${visualCause}，[策略] ${strategyIssue}。
             參考當前畫面：[${role}] ${visualEvidence || '內容單一'}。
-            請根據「${conflictType || '預期反差'}」的核心轉折邏輯，重新生成 3 組 10 秒內的改進腳本，要求將語速優化至 3.2 字/秒，並在視覺上加入具體的【數據證據】或【動作轉場】以彌補流失。`
+            請根據「${conflictType || '預期反差'}」的核心轉折邏輯，重新生成 3 組 10 秒內的改進腳本，要求將語速優化至 3.2 字/秒，並在視覺上加入具體的【數據證據】或【動作轉場】以彌補流失。`,
+            assistantPrompt
         };
     };
 
     const diagnosticReport = generateDiagnosticReport();
+
+    const handleGeminiAnalysis = async () => {
+        let key = localStorage.getItem('GEMINI_API_KEY') || import.meta.env.VITE_GEMINI_API_KEY;
+        if (!key) {
+            setShowApiKeyPrompt(true);
+            return;
+        }
+        
+        setIsAnalyzing(true);
+        setGeminiResponse(null);
+        setLastAnalyzedAt(null);
+        setShowApiKeyPrompt(false);
+        
+        try {
+            // 建構 Full Context Prompt
+            const slidesContext = allSlidesData
+                .filter((s: any) => s.video_id === video.originalId)
+                .sort((a, b) => Number(a.slide_no) - Number(b.slide_no))
+                .map((s: any, idx) => `[Slide ${idx + 1} (${s.start_time}s - ${s.end_time}s)]\n角色: ${s.role || '未標註'}\n旁白: ${s.speech_content_ch || '未標註'}\n字卡: ${s.image_text_ch || '未標註'}\n視覺證據: ${s.visual_evidence || '未標註'}`)
+                .join('\n\n');
+
+            const retCurveStr = (video.retentionData || []).map((d: any) => `${d.formattedTime || d.time || d.time_label || d.timeIndex || ''}:${d.retention || d.retention_rate || d.rate || d.y || ''}%`).filter((s: string) => !s.startsWith(':')).join(', ');
+            
+            const kpiContext = `[基礎表現]\n平台: ${video.platform || '無'} | 觀看數: ${video.kpi.views || '0'} | 發布時間: ${video.publishedAt}\n按讚: ${video.kpi.likes || '0'} | 留言: ${video.kpi.comments || '0'} | 預期收益: ${video.kpi.er || '無'}\n\n[留存深度]\n平均觀看: ${video.depthMetrics?.averageRetention || 0}% | 完看率: ${video.depthMetrics?.endRetentionRate || 0}%\n影片總長: ${video.maxDuration}秒\n\n全網留存曲線 (時間:留存率%):\n[ ${retCurveStr} ]\n\n[策略標籤]\n一級標籤: ${video.l1Tags?.join(', ') || '無'}\n二級標籤: ${video.l2Tags?.join(', ') || '無'}`;
+
+            const fullPrompt = `你現在是一位高階短影音策略顧問與流量分析師。請對以下影片進行「全片綜合健檢」，並輸出可用的 Prompt Action。
+
+### 【重要分析原則：包容性判定與頻道差異防呆】
+當您發現影片中的「字卡 (Image Text)」或「視覺證據 (Visual Evidence)」等欄位出現『未標註』或空白時，**請絕對不要直接將其批評為「視覺匱乏」、「無聊」或「製作失敗」**。
+發生空值的原因可能如下：
+1. **尚未分析/標註**：該影片可能只有系統自動爬取的留存數據與旁白，尚未進行人工的視覺與心理特微標註。
+2. **頻道屬性差異**：某些類型的短影音（例如：純故事解說頻道、Vlog、純語音配圖頻道）本來就不仰賴畫面強調的字卡，而是完全依靠「旁白/字幕」的聽覺來推進劇情。
+
+👉 **你的診斷要求**：
+- 請依據當前「有提供」的實質資料（如：旁白的文本內容、以及秒級留存曲線的真實起伏），結合這支影片「最有可能的頻道屬性」去進行客觀判斷。
+- 如果字卡是空的，就去審視旁白說了什麼導致留存率崩潰，並給予**文案寫作**的 Prompt 建議。
+- 不要對空值窮追猛打，要聚焦在「現有資料為何導致觀眾流失」以及「如何透過具體的 Prompt 規則設定來改善」。
+
+### 【量化數據與表現指標】
+${kpiContext}
+
+### 【全片劇本與畫面分鏡表】
+${slidesContext}
+
+請產出以下格式的報告 (使用 Markdown 結構化輸出)：
+## 1. 全片策略總評 (Overview)
+基於數據表現、完整留存曲線與標籤設定，評估整體策略是否奏效，以及做得好的高光點與失敗的缺失。
+## 2. 關鍵流失診斷 (Critical Drops)
+結合秒數留存率的劇烈變化與該區段的劇本內容，明確指出哪裡做得不好、致命點是什麼。
+## 3. 行動指南：Prompt 升級建議 (Actionable Prompt Advice)
+將你發現的解決方案轉化為「具體的 Prompt 寫作規則設計」。這些規則應該可以直接複製貼上到我未來影片生成的 Prompt 中（例如：請在腳本中規定前 10 秒單行字數不得超過...）。`;
+
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: fullPrompt }] }],
+                    generationConfig: { temperature: 0.7 }
+                })
+            });
+
+            if (!response.ok) {
+                if (response.status === 400 || response.status === 403) {
+                     localStorage.removeItem('GEMINI_API_KEY');
+                     throw new Error('API Key 無效或過期，請重新輸入。');
+                }
+                throw new Error('API 呼叫失敗: ' + response.statusText);
+            }
+
+            const data = await response.json();
+            const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (textResponse) {
+                setGeminiResponse(textResponse);
+                setIsReportExpanded(true); // 新分析完成預設展開
+                const currentTime = new Date().toLocaleString('zh-TW');
+                setLastAnalyzedAt(currentTime);
+                
+                // 非同步寫入 Supabase
+                supabase.from('video_ai_insights').insert([{
+                    video_id: video.originalId,
+                    insight_type: 'FULL_VIDEO_CHECKUP',
+                    insight_content: textResponse,
+                    model_used: 'gemini-2.5-flash'
+                }]).then(({ error }) => {
+                    if (error) console.error("Failed to save insight to Supabase:", error);
+                });
+            } else {
+                setGeminiResponse('⚠️ 無法解析 Gemini 回應，請稍後再試。');
+            }
+        } catch (error: any) {
+            setGeminiResponse(`❌ 分析失敗: ${error.message}`);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
+    const saveApiKeyAndRun = () => {
+        if (!apiKeyInput.trim()) return;
+        localStorage.setItem('GEMINI_API_KEY', apiKeyInput.trim());
+        setShowApiKeyPrompt(false);
+        setApiKeyInput('');
+        handleGeminiAnalysis();
+    };
 
     return (
         <div className="p-4 md:p-5 pt-0 border-t border-gray-800/50 grid grid-cols-1 lg:grid-cols-12 gap-4 mt-1">
@@ -536,47 +687,107 @@ export function VideoDetailPanel({ video, allSlidesData }: { video: VideoData; a
                 </div>
 
                 {/* AI 改善總結與核心診斷 (D component) */}
+                {/* AI 全域綜合健檢 (D component) */}
                 <div className="flex flex-col gap-4">
-                    {/* 核心流失診斷區 (僅在流失區間顯示) */}
-                    {diagnosticReport && (
-                        <div className="bg-rose-500/10 border border-rose-500/30 p-5 rounded-2xl relative overflow-hidden group shadow-lg">
-                            <div className="flex items-center gap-2 mb-3">
-                                <AlertCircle className="w-5 h-5 text-rose-400 animate-pulse" />
-                                <h5 className="font-bold text-rose-400 text-[13px] uppercase tracking-widest">
-                                    {diagnosticReport.status}
-                                </h5>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                                <div className="space-y-1">
-                                    <p className="text-[10px] text-rose-300/60 font-bold uppercase tracking-widest">視覺誘因診斷</p>
-                                    <p className="text-sm text-gray-200 font-medium">{diagnosticReport.visualCause}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <p className="text-[10px] text-indigo-300/60 font-bold uppercase tracking-widest">底層策略診斷</p>
-                                    <p className="text-sm text-gray-200 font-medium">{diagnosticReport.strategyIssue}</p>
-                                </div>
-                            </div>
-                            <div className="bg-black/40 border border-rose-500/20 p-4 rounded-xl">
-                                <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest mb-2 flex items-center gap-2">
-                                    <Zap className="w-3 h-3" /> LLM 行動製作指令 (自動產出)
+                    <div className="w-full">
+                        {/* Gemini 一鍵分析按鈕 */}
+                        <div className="flex flex-col gap-1 mt-4">
+                            <button
+                                onClick={handleGeminiAnalysis}
+                                disabled={isAnalyzing}
+                                className={`w-full py-3 ${isAnalyzing ? 'bg-indigo-800 cursor-wait' : 'bg-indigo-600/80 hover:bg-indigo-500'} text-white rounded-xl text-[13px] font-bold tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-indigo-500/25 border border-indigo-400/50 group/btn`}
+                            >
+                                {isAnalyzing ? (
+                                    <><span className="animate-spin text-lg leading-none">⚙️</span> 系統分析中...</>
+                                ) : (
+                                    <><span className="group-hover/btn:animate-bounce text-lg leading-none">✨</span> 呼叫 Gemini 進行全片綜合健檢與 Prompt 優化</>
+                                )}
+                            </button>
+                            {lastAnalyzedAt && !isAnalyzing && !geminiResponse && (
+                                <p className="text-[10px] text-gray-500 text-center uppercase tracking-widest mt-1">
+                                    🕒 上次綜合健檢：<span className="text-indigo-400">{lastAnalyzedAt}</span> (點擊按鈕載入或重複健檢)
                                 </p>
-                                <div className="relative group/prompt">
-                                    <p className="text-xs text-gray-400 italic leading-relaxed line-clamp-2 group-hover/prompt:line-clamp-none transition-all">
-                                        {diagnosticReport.llmPrompt}
-                                    </p>
-                                    <button
-                                        onClick={() => {
-                                            navigator.clipboard.writeText(diagnosticReport.llmPrompt);
-                                            alert("LLM Prompt 已複製！您可以直接貼給腳本編導 AI。");
-                                        }}
-                                        className="mt-2 flex items-center gap-2 text-[10px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
-                                    >
-                                        <Copy className="w-3 h-3" /> 複製完整製作指令並生成 3 組新腳本
-                                    </button>
+                            )}
+                        </div>
+
+                        {/* API Key Modal */}
+                        {showApiKeyPrompt && (
+                            <div className="mt-4 bg-black/60 border border-gray-700 p-4 rounded-xl backdrop-blur-sm animate-in fade-in zoom-in duration-200">
+                                <p className="text-sm font-bold text-gray-200 mb-2">🔑 請輸入您的 Gemini API Key</p>
+                                <p className="text-[10px] text-gray-400 mb-3">您的 Key 將安全地儲存在本地瀏覽器中，不會上傳至任何伺服器。</p>
+                                <input 
+                                    type="password" 
+                                    value={apiKeyInput}
+                                    onChange={(e) => setApiKeyInput(e.target.value)}
+                                    placeholder="AIzaSy..."
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white mb-3 focus:outline-none focus:border-indigo-500"
+                                />
+                                <div className="flex gap-2 justify-end">
+                                    <button onClick={() => setShowApiKeyPrompt(false)} className="px-4 py-2 text-xs font-bold text-gray-400 hover:text-white transition-colors">取消</button>
+                                    <button onClick={saveApiKeyAndRun} className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors">儲存並開始分析</button>
                                 </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+
+                        {/* Gemini 報告渲染區塊 */}
+                        {geminiResponse && (
+                            <div className="mt-4 w-full bg-gradient-to-br from-[#111827] to-[#0d1424] border border-indigo-500/30 rounded-xl shadow-2xl animate-in slide-in-from-top-2 duration-300">
+                                <div 
+                                    className="bg-indigo-900/30 px-4 py-3 border-b border-indigo-500/20 flex justify-between items-center relative overflow-hidden cursor-pointer hover:bg-indigo-900/40 transition-colors rounded-t-xl"
+                                    onClick={() => setIsReportExpanded(!isReportExpanded)}
+                                >
+                                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 opacity-50"></div>
+                                    <div className="flex flex-col relative z-10 w-full">
+                                        <div className="flex items-center justify-between w-full">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-lg leading-none">✨</span>
+                                                <span className="text-sm font-bold text-indigo-300 tracking-widest uppercase">全片策略總評與行動建議</span>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); localStorage.removeItem('GEMINI_API_KEY'); setGeminiResponse(null); alert('API Key 已從本地清除！'); }}
+                                                    className="text-[10px] text-gray-400 hover:text-rose-400 transition-colors z-10 px-2 py-1 rounded bg-black/20"
+                                                    title="清除本地儲存的 API Key"
+                                                >
+                                                    清除金鑰
+                                                </button>
+                                                <button className="text-indigo-400 hover:text-indigo-300 transition-colors">
+                                                    {isReportExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {lastAnalyzedAt && (
+                                            <span className="text-[10px] text-gray-400 mt-1 ml-7">🕒 診斷時間：{lastAnalyzedAt}</span>
+                                        )}
+                                    </div>
+                                </div>
+                                
+                                {isReportExpanded && (
+                                    <div className="p-4 md:p-5 text-[13px] md:text-sm text-gray-200 leading-relaxed font-medium overflow-y-auto max-h-[500px] scrollbar-hide text-left rounded-b-xl border-t border-indigo-500/10">
+                                        {geminiResponse.split('\n').map((line, i) => {
+                                        if (line.startsWith('## ')) return <h3 key={i} className="text-lg font-bold text-white mt-5 mb-2">{line.replace('## ', '')}</h3>;
+                                        if (line.startsWith('### ')) return <h4 key={i} className="text-md font-bold text-indigo-200 mt-4 mb-1">{line.replace('### ', '')}</h4>;
+                                        if (line.startsWith('* **') || line.startsWith('- **')) return <ul key={i} className="list-disc ml-5 my-1"><li className="text-gray-100">{line.replace(/^[\*\-] \*\*/, '').replace(/\*\*:/, ':')}</li></ul>;
+                                        if (line.startsWith('* ') || line.startsWith('- ')) return <ul key={i} className="list-disc ml-5 my-1"><li className="text-gray-300">{line.replace(/^[\*\-] /, '')}</li></ul>;
+                                        if (line.trim() === '') return <div key={i} className="h-2" />;
+                                        
+                                        // Handle basic bold text
+                                        const parts = line.split(/(\*\*.*?\*\*)/g);
+                                        return (
+                                            <p key={i} className="mb-2 last:mb-0">
+                                                {parts.map((part, j) => 
+                                                    part.startsWith('**') && part.endsWith('**') 
+                                                        ? <strong key={j} className="text-indigo-200">{part.slice(2, -2)}</strong>
+                                                        : part
+                                                )}
+                                            </p>
+                                        );
+                                    })}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
 
                     {/* 常規 AI 優化建議 */}
                     {targetEvent && (
