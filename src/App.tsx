@@ -1,9 +1,10 @@
-﻿import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
-import { AlertCircle, ChevronDown, ChevronUp, Hash, Loader2, Filter, Copy, CheckCircle2, Bookmark, Activity, Eye, ThumbsUp, Target, Menu, X, LayoutGrid, Database, BarChart2, RefreshCw, Focus } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronUp, Hash, Loader2, Filter, Copy, CheckCircle2, Bookmark, Activity, Eye, ThumbsUp, Target, Menu, X, LayoutGrid, Database, BarChart2, RefreshCw, Focus, Calendar } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import Papa from 'papaparse';
 import { VideoDetailPanel } from './VideoDetailPanel';
+import { ChannelMilestonePanel, MilestoneEvent } from './ChannelMilestonePanel';
 
 const SHEET_URL = "https://docs.google.com/spreadsheets/d/184Kve5A6Dto51RLbgDON3Z2zODiVniWVcIlWi1gNAVg/export?format=csv&gid=1214765895";
 
@@ -81,6 +82,25 @@ export default function ContentAttributionEngine() {
     const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(true);
     const [onlyHasRetention, setOnlyHasRetention] = useState(false);
     const [onlyHasSlides, setOnlyHasSlides] = useState(false);
+    const [isMilestonePanelOpen, setIsMilestonePanelOpen] = useState(false);
+    const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (activeChannels.length !== 1) {
+            setIsMilestonePanelOpen(false);
+            setSelectedEventId(null);
+        }
+    }, [activeChannels]);
+
+    // Scroll inline event into view when selected from the sidebar
+    useEffect(() => {
+        if (selectedEventId) {
+            const el = document.getElementById(`inline-evt-${selectedEventId}`);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    }, [selectedEventId]);
 
     // 使用 useMemo 快取過濾後的列表，確保在狀態切換時邏輯絕對精準
     const filteredVideos = useMemo(() => {
@@ -100,6 +120,12 @@ export default function ContentAttributionEngine() {
             return platformMatch && channelMatch && retentionMatch && slidesMatch;
         });
     }, [videos, activePlatforms, activeChannels, onlyHasRetention, onlyHasSlides]);
+
+    const combinedList = useMemo(() => {
+        const list: any[] = filteredVideos.map(v => ({ type: 'video', data: v, timestamp: v.timestamp }));
+        // 里程碑事件現在改由右側 ChannelMilestonePanel 從 Supabase 即時讀取顯示
+        return list.sort((a, b) => b.timestamp - a.timestamp);
+    }, [filteredVideos, activeChannels, activePlatforms]);
 
     const toggleFilter = (item: string, setter: any) => {
         setter((prev: string[]) => {
@@ -647,14 +673,25 @@ export default function ContentAttributionEngine() {
 
                         {/* 影片清單與功過表面板容器移至外部以防止受 max-h-0 影響 */}
                     </div>
-                    {/* 影片清單與功過表面板 */}
-                    <div className="space-y-6">
-                        {filteredVideos.map((video) => {
-                            const isExpanded = expandedVideoId === video.id;
+                    {/* 影片清單與任務事件混合列表 */}
+                    <div className="space-y-6 relative mt-10 pr-20">
+                        <div 
+                            className="absolute right-10 -top-5 w-10 h-10 translate-x-1/2 rounded-full bg-[#0B0F19] border border-indigo-500/50 flex items-center justify-center cursor-pointer shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:bg-indigo-500 hover:border-indigo-400 hover:text-white text-indigo-400 transition-all z-20 group"
+                            onClick={() => { setIsMilestonePanelOpen(true); setSelectedEventId(null); }}
+                            title="展開完整的頻道調整歷程"
+                        >
+                            <Target className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                        </div>
+                        <div className="absolute right-10 top-0 bottom-0 w-px bg-gradient-to-b from-indigo-500/50 via-gray-800 to-transparent z-0"></div>
 
-                            return (
-                                <div
-                                    key={video.id}
+                        {combinedList.map((item, index) => {
+                            if (item.type === 'video') {
+                                const video = item.data;
+                                const isExpanded = expandedVideoId === video.id;
+
+                                return (
+                                    <div
+                                        key={video.id}
                                     className={`rounded-2xl border transition-all duration-500 overflow-hidden ${isExpanded
                                         ? 'bg-[#151E32] border-indigo-500/30 shadow-[0_0_40px_-10px_rgba(99,102,241,0.15)]'
                                         : 'bg-[#0F172A] border-gray-800 hover:border-gray-700 cursor-pointer'
@@ -808,10 +845,48 @@ export default function ContentAttributionEngine() {
                                     </div>
                                 </div>
                             );
+                            } else {
+                                const evt = item.data;
+                                const isSelected = selectedEventId === evt.id;
+                                
+                                return (
+                                    <div key={`evt-${evt.id}`} id={`inline-evt-${evt.id}`} className={`relative group w-full flex justify-end items-center shrink-0 z-10 transition-all cursor-pointer py-4`} onClick={() => { setSelectedEventId(evt.id); setIsMilestonePanelOpen(true); }}>
+                                        <div className={`absolute top-1/2 w-3 h-3 rounded-full ${isSelected ? 'bg-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.8)]' : 'bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.6)] group-hover:bg-indigo-400 group-hover:scale-125'} ring-4 ring-[#0B0F19] transition-all duration-300`} style={{ right: '-40px', transform: 'translate(50%, -50%)' }}></div>
+                                        
+                                        <div className={`mr-10 w-[260px] md:w-[280px] bg-[#151E32]/90 backdrop-blur-md border rounded-xl p-3.5 shadow-xl transition-all duration-300 border-gray-700/60 ${isSelected ? 'ring-1 ring-emerald-500/50 bg-[#151E32] scale-[1.02]' : 'hover:bg-[#151E32]'}`}>
+                                            <div className="flex items-center gap-2 mb-1.5">
+                                                <Calendar className="w-3.5 h-3.5 text-gray-400" />
+                                                <span className="text-[11px] font-mono text-gray-400 font-bold tracking-wide">{evt.date}</span>
+                                                <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded uppercase tracking-widest border ${
+                                                    evt.platform === 'YOUTUBE' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 
+                                                    evt.platform === 'INSTAGRAM' ? 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20' :
+                                                    evt.platform === 'TIKTOK' ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' :
+                                                    'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                                }`}>{evt.platform}</span>
+                                            </div>
+                                            <p className={`text-sm font-bold leading-snug mb-1.5 transition-colors ${isSelected ? 'text-emerald-300' : 'text-gray-200 group-hover:text-white'}`}>{evt.title}</p>
+                                            <p className="text-[10px] text-emerald-400/80 font-medium flex items-center gap-1.5">
+                                                <Eye className="w-3 h-3" /> 點擊展開前後數據比較
+                                            </p>
+                                        </div>
+                                    </div>
+                                );
+                            }
                         })}
                     </div>
                 </main>
             </div>
+
+            {/* C. 右側邊欄：單一頻道 Milestone 面板 */}
+            <ChannelMilestonePanel
+                channelName={activeChannels.length > 0 ? activeChannels[0] : ""}
+                isOpen={isMilestonePanelOpen}
+                selectedEventId={selectedEventId}
+                activePlatforms={activePlatforms}
+                videos={videos}
+                onSelectEvent={(id) => setSelectedEventId(id)}
+                onClose={() => setIsMilestonePanelOpen(false)}
+            />
         </div>
     );
 }
