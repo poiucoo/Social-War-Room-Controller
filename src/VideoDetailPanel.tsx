@@ -287,7 +287,7 @@ ${slidesContext}
                 <div className="flex flex-row items-center justify-between mb-2">
                     <h4 className="text-white font-bold flex items-center gap-2">
                         <BarChart2 className="w-5 h-5 text-indigo-400" />
-                        互動式觀眾留存曲線
+                        觀眾留存曲線
                     </h4>
                     <div className="flex bg-[#1E293B]/40 px-3 py-1.5 rounded-xl border border-white/5 items-center gap-4 w-fit scale-90 origin-right">
                         <div className="flex flex-col items-center">
@@ -779,7 +779,7 @@ ${slidesContext}
                             <div className="flex justify-between items-center mb-8 relative z-10">
                                 <h4 className="text-xl font-bold text-white flex items-center gap-3">
                                     <div className="w-1.5 h-6 bg-indigo-500 rounded-full"></div>
-                                    互動式觀眾留存曲線 (延展視圖)
+                                    觀眾留存曲線 (延展視圖)
                                 </h4>
                                 <div className="flex items-center gap-2 text-xs font-bold text-gray-500 uppercase tracking-widest bg-white/5 px-4 py-2 rounded-full border border-white/5">
                                     <Focus className="w-4 h-4 text-indigo-400" />
