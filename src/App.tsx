@@ -4,7 +4,7 @@ import { AlertCircle, ChevronDown, ChevronUp, Hash, Loader2, Filter, Copy, Check
 import { supabase } from './lib/supabase';
 import Papa from 'papaparse';
 import { VideoDetailPanel } from './VideoDetailPanel';
-import { ChannelMilestonePanel, MilestoneEvent } from './ChannelMilestonePanel';
+import { ChannelMilestonePanel } from './ChannelMilestonePanel';
 
 const SHEET_URL = "https://docs.google.com/spreadsheets/d/184Kve5A6Dto51RLbgDON3Z2zODiVniWVcIlWi1gNAVg/export?format=csv&gid=1214765895";
 
@@ -206,7 +206,7 @@ export default function ContentAttributionEngine() {
                         const l1Tags: string[] = [];
                         const l2Tags: string[] = [];
 
-                        Object.entries(strategyRecord).forEach(([key, val]) => {
+                        (Object.entries(strategyRecord as Record<string, unknown>)).forEach(([key, val]: [string, unknown]) => {
                             if (!val || val === 'N/A' || val === '—' || val === '' || key === 'video_id' || key === 'analysis_updated_at') return;
 
                             const processVal = (v: any): string[] => {
@@ -684,7 +684,7 @@ export default function ContentAttributionEngine() {
                         </div>
                         <div className="absolute right-10 top-0 bottom-0 w-px bg-gradient-to-b from-indigo-500/50 via-gray-800 to-transparent z-0"></div>
 
-                        {combinedList.map((item, index) => {
+                        {combinedList.map((item, _index) => {
                             if (item.type === 'video') {
                                 const video = item.data;
                                 const isExpanded = expandedVideoId === video.id;
@@ -771,7 +771,7 @@ export default function ContentAttributionEngine() {
                                                     {/* 第一行：一級標籤 (策略/結構) - Indigo */}
                                                     {video.l1Tags.length > 0 && (
                                                         <div className="flex flex-wrap gap-1.5">
-                                                            {video.l1Tags.map((tag, idx) => (
+                                                            {video.l1Tags.map((tag: string, idx: number) => (
                                                                 <span key={idx} className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 whitespace-nowrap">
                                                                     <Hash className="w-2.5 h-2.5 text-indigo-400" /> {tag.replace(/\[|\]|"/g, '')}
                                                                 </span>
@@ -781,7 +781,7 @@ export default function ContentAttributionEngine() {
                                                     {/* 第二行：二級標籤 (心理/核心) - Emerald */}
                                                     {video.l2Tags.length > 0 && (
                                                         <div className="flex flex-wrap gap-1.5">
-                                                            {video.l2Tags.map((tag, idx) => (
+                                                            {video.l2Tags.map((tag: string, idx: number) => (
                                                                 <span key={idx} className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 whitespace-nowrap">
                                                                     <Activity className="w-2.5 h-2.5 text-emerald-400" /> {tag.replace(/\[|\]|"/g, '')}
                                                                 </span>
@@ -807,7 +807,7 @@ export default function ContentAttributionEngine() {
                                             ].map((metric) => {
                                                 const tl = video.timelineData;
                                                 // 修正：僅過濾出真正有數值的節點，排除為了固定 X 軸而產生的空節點或字串
-                                                const validTl = tl.filter(t => typeof t[metric.key as keyof typeof t] === 'number');
+                                                const validTl = tl.filter((t: Record<string, unknown>) => typeof t[metric.key] === 'number');
                                                 const lastVal = validTl.length > 0 ? validTl[validTl.length - 1][metric.key as keyof typeof validTl[0]] : 0;
 
                                                 return (
