@@ -85,11 +85,46 @@ export default function ContentAttributionEngine() {
     const [isMilestonePanelOpen, setIsMilestonePanelOpen] = useState(false);
     const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
+    const [inlineMilestones, setInlineMilestones] = useState<any[]>([]);
+
     useEffect(() => {
         if (activeChannels.length !== 1) {
             setIsMilestonePanelOpen(false);
             setSelectedEventId(null);
+            setInlineMilestones([]);
+            return;
         }
+        // 單一頻道選擇時，從 Supabase 抓取里程碑顯示在時間軸
+        supabase
+            .from('milestones')
+            .select('*')
+            .eq('channel_name', activeChannels[0])
+            .order('date', { ascending: false })
+            .then(({ data }) => {
+                if (data && data.length > 0) {
+                    setInlineMilestones(data.map(row => {
+                        const pivotDate = new Date(row.date);
+                        const beforeEnd = new Date(pivotDate);
+                        beforeEnd.setDate(beforeEnd.getDate() - 1);
+                        return {
+                            id: row.id,
+                            date: row.date,
+                            platform: row.platform,
+                            title: row.title,
+                            description: row.description,
+                            observationWindow: {
+                                mode: 'auto',
+                                beforeStarts: row.before_start,
+                                beforeEnds: beforeEnd.toISOString().split('T')[0],
+                                afterStarts: pivotDate.toISOString().split('T')[0],
+                                afterEnds: row.after_end
+                            }
+                        };
+                    }));
+                } else {
+                    setInlineMilestones([]);
+                }
+            });
     }, [activeChannels]);
 
     // Scroll inline event into view when selected from the sidebar
@@ -123,9 +158,18 @@ export default function ContentAttributionEngine() {
 
     const combinedList = useMemo(() => {
         const list: any[] = filteredVideos.map(v => ({ type: 'video', data: v, timestamp: v.timestamp }));
-        // 里程碑事件現在改由右側 ChannelMilestonePanel 從 Supabase 即時讀取顯示
+        // 里程碑事件從 Supabase 即時讀取，插入時間軸
+        inlineMilestones.forEach((e: any) => {
+            const eventPlatform = String(e.platform).toUpperCase();
+            const isMatch = activePlatforms.length === 0 ||
+                            eventPlatform === 'ALL' ||
+                            activePlatforms.some((p: string) => p.toUpperCase() === eventPlatform);
+            if (isMatch) {
+                list.push({ type: 'event', data: e, timestamp: new Date(e.date.replace(/-/g, '/')).getTime() });
+            }
+        });
         return list.sort((a, b) => b.timestamp - a.timestamp);
-    }, [filteredVideos, activeChannels, activePlatforms]);
+    }, [filteredVideos, activeChannels, activePlatforms, inlineMilestones]);
 
     const toggleFilter = (item: string, setter: any) => {
         setter((prev: string[]) => {
